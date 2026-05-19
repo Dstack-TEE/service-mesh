@@ -18,7 +18,7 @@ do we do about it?", and lands on a prioritised punch list.
                          Consul infra ports, 3-byte stream header
   Layer 1   transport    pion/ice + QUIC: punched UDP path,
                          stream multiplex, flow control, keepalive
-  Layer 0   rendezvous   coturn + signalling broker on a public box;
+  Layer 0   bootstrap    coturn + signalling broker on a public box;
                          dstack CVMs behind a provider NAT
 ```
 
@@ -36,7 +36,7 @@ clever-and-ours bits are the peer-VIP plane and the 3-byte stream
 header. Both are simple enough to audit, but exactly because they're
 ours, they're the parts that *must* be made robust by hand.
 
-## Layer 0 — rendezvous infra
+## Layer 0 — NAT traversal bootstrap infra
 
 ### What's there
 

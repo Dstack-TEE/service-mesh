@@ -13,9 +13,9 @@ only thing the CVMs share is outbound internet egress.
 
 Plus one plain Linux box with a public IP — the **external
 coordinator** — running `coturn` (STUN/TURN) and a tiny HTTP
-signaling broker. This is rendezvous infrastructure only: once peers
-have ICE-handshaked, no data passes through it (TURN is the fallback
-when direct ICE candidates can't establish).
+signaling broker. This is NAT traversal bootstrap infrastructure only:
+once peers have ICE-handshaked, no data passes through it unless TURN
+relay fallback is required.
 
 ```
                       coturn + signaling

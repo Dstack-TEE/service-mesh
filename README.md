@@ -39,11 +39,15 @@ cp terraform.tfvars.example terraform.tfvars
 $EDITOR terraform.tfvars
 ```
 
-Fill in the Phala Cloud gateway and connection-bootstrap settings in
-`terraform.tfvars`. In the product path, the bootstrap endpoint should
-be supplied by Phala Cloud as shared service-mesh infrastructure. If
-your environment does not have that yet, use the self-hosted coordinator
-in [`coordinator/`](coordinator/) and paste its `external_*` values.
+Fill in the Phala Cloud gateway and NAT traversal bootstrap settings in
+`terraform.tfvars`. The easiest first-run path should use a public demo
+bootstrap service operated by Phala Cloud. That service lets CVMs
+exchange connection setup messages and discover usable network paths; it
+should not carry application traffic in the normal case.
+
+If a public demo endpoint is not available in your environment yet, use
+the self-hosted coordinator in [`coordinator/`](coordinator/) and paste
+its `external_*` values.
 
 Then deploy:
 
@@ -227,8 +231,8 @@ docker build -t service-mesh-mesh-sidecar-check -f mesh-sidecar/Dockerfile .
 
 ## Current Limits
 
-- The easiest user experience depends on a hosted connection-bootstrap
-  endpoint.
+- The easiest user experience depends on a hosted NAT traversal
+  bootstrap endpoint.
   Until that is available in your environment, use the self-hosted
   coordinator fallback in [`coordinator/`](coordinator/).
 - Provider `0.3.0-beta.1` supports stable instance management, but

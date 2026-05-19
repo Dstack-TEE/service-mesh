@@ -62,7 +62,7 @@ services:
       - COORDINATOR_VIPS=${COORDINATOR_VIPS}
       # External coordinator path: coordinator mesh-conn uses the same
       # public coturn + signaling endpoint that workers do, so peer-pair
-      # ICE rendezvous happens in a single shared place.
+      # NAT traversal setup happens in a single shared place.
       - SIGNALING_URL=${SIGNALING_URL}
       - TURN_HOST=${TURN_HOST}
       - TURN_SHARED_SECRET=${TURN_SHARED_SECRET}

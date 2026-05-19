@@ -22,12 +22,12 @@ mesh_sidecar_image = "ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest"
 webdemo_image      = "ghcr.io/dstack-tee/service-mesh/webdemo:latest"
 patroni_image      = "ghcr.io/dstack-tee/service-mesh/patroni:latest"
 
-# Rendezvous settings. In the productized path these should come from
-# Phala Cloud managed service-mesh infrastructure. Until that is
-# available in your environment, run coordinator/docker-compose.yaml on
-# a public-IP host and use its values here.
-# external_coordinator_host  = "<managed-or-self-hosted-rendezvous-host>"
-# external_signaling_url     = "http://<managed-or-self-hosted-rendezvous-host>:7000"
+# NAT traversal bootstrap settings. In the productized path these should
+# come from Phala Cloud managed service-mesh infrastructure. Until that
+# is available in your environment, run coordinator/docker-compose.yaml
+# on a public-IP host and use its values here.
+# external_coordinator_host  = "<managed-or-self-hosted-bootstrap-host>"
+# external_signaling_url     = "http://<managed-or-self-hosted-bootstrap-host>:7000"
 # external_turn_secret       = "<hex>"
 
 # Attestation admission is enabled by default. Terraform generates the

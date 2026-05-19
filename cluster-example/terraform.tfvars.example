@@ -30,10 +30,10 @@ patroni_image      = "ghcr.io/dstack-tee/service-mesh/patroni:latest"
 # external_signaling_url     = "http://<managed-or-self-hosted-rendezvous-host>:7000"
 # external_turn_secret       = "<hex>"
 
-# Optional: gate Consul client-agent join and Connect service identity
-# registration on dstack TEE attestation.
+# Attestation admission is enabled by default. Terraform generates the
+# Consul management token when consul_management_token is empty.
 # enable_attestation_admission = true
-# consul_management_token      = "<consul-acl-management-token>"
+# consul_management_token      = "<optional-consul-acl-management-token>"
 # dstack_verifier_image        = "dstacktee/dstack-verifier:0.5.9" # Pin by digest in production.
 # kms                          = "phala"
 # admission_expected_kms_public_key defaults to the public key for the

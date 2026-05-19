@@ -56,8 +56,8 @@ provider "phala" {}
 # need the same gossip_key, etc.), and the coordinator and worker
 # apps have different `app_id`s, so cross-role derivation still
 # needs an external source. The terraform-generated random_bytes
-# below remain the temporary workaround until attestation-rooted
-# admission lands.
+# below remain the temporary workaround until attestation-rooted secret
+# generation and distribution lands.
 #
 # Trade-off accepted: anyone with read access to terraform.tfstate
 # (or the apply host's memory) sees plaintext keys.
@@ -72,6 +72,9 @@ resource "random_bytes" "patroni_superuser_pw" {
   length = 32
 }
 resource "random_bytes" "patroni_replication_pw" {
+  length = 32
+}
+resource "random_bytes" "consul_management_token" {
   length = 32
 }
 
@@ -154,15 +157,15 @@ variable "mesh_conn_debug_ice" {
 
 variable "enable_attestation_admission" {
   type        = bool
-  default     = false
-  description = "Start the coordinator admission broker and pass it the generated static workload policy."
+  default     = true
+  description = "Start the coordinator admission broker and require attested workers before issuing Consul node and service tokens."
 }
 
 variable "consul_management_token" {
   type        = string
   default     = ""
   sensitive   = true
-  description = "Consul management ACL token used by admission-broker to mint service-identity tokens when attestation admission is enabled."
+  description = "Optional Consul management ACL token used by admission-broker to mint scoped tokens. When empty, Terraform generates one."
 }
 
 variable "admission_expected_kms_public_key" {
@@ -184,6 +187,11 @@ variable "admission_expected_kms_public_key" {
 
 locals {
   launch_os_image = trimspace(var.os_image) == "" ? null : trimspace(var.os_image)
+  effective_consul_management_token = (
+    trimspace(var.consul_management_token) != ""
+    ? var.consul_management_token
+    : random_bytes.consul_management_token.hex
+  )
 
   # Peer VIPs: 127.50.0.<vip>/32. Allocated as ordinal+1 (so vip=1
   # for the first coordinator, never 0 — the validate_test in
@@ -493,7 +501,7 @@ locals {
   coordinator_env = {
     for k, env in local.coordinator_preflight_env : k => merge(env, {
       ADMISSION_POLICY_JSON   = local.admission_policy_json
-      CONSUL_MANAGEMENT_TOKEN = var.consul_management_token
+      CONSUL_MANAGEMENT_TOKEN = local.effective_consul_management_token
     })
   }
 
@@ -555,10 +563,6 @@ resource "phala_app" "coordinator" {
   wait_timeout_seconds = 600
 
   lifecycle {
-    precondition {
-      condition     = !var.enable_attestation_admission || var.consul_management_token != ""
-      error_message = "consul_management_token must be set when enable_attestation_admission is true."
-    }
     precondition {
       condition     = !var.enable_attestation_admission || var.admission_expected_kms_public_key != ""
       error_message = "admission_expected_kms_public_key must be set when enable_attestation_admission is true."

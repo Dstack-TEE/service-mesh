@@ -1,68 +1,36 @@
 # service-mesh
 
-Run a cluster of TEE workloads on Phala Cloud.
+Build attested applications that span multiple Phala Cloud CVMs.
 
-A single dstack CVM gives you one verifiable machine. Most real systems
-need more than one machine: a database primary and replicas, API nodes,
-background workers, coordinators, failover, and private traffic between
-them. This project shows how to turn several Phala Cloud CVMs into one
-attested cluster.
+If you already know dstack, you know how to prove one CVM is running the
+code you expect. The next step is harder: a real application usually has
+several machines. You need replicas, workers, coordinators, private
+traffic, failover, and a way to reject any machine that cannot prove it
+belongs to the deployment.
 
-The first example is HA PostgreSQL, but the important part is the
-cluster pattern:
+This repo is a working template for that next step. It deploys an
+attested multi-CVM cluster and gives the workloads normal service names
+to call, while the platform layer handles private routing and admission.
 
-- Deploy multiple CVMs with Terraform.
-- Give every workload a stable slot name.
-- Let services call each other by name, such as `postgres-master:5432`.
-- Keep service traffic private inside the mesh.
-- Optionally require dstack attestation before a CVM can join the mesh
-  identity layer.
+The demo workload is HA PostgreSQL plus a small web service. The lesson
+is broader: define the cluster once, deploy it to Phala Cloud, and only
+admit peers whose TEE evidence matches the definition.
 
-You should be able to get to the first useful moment without learning
-Consul, Envoy, ICE, TURN, QUIC, or Patroni internals.
+## Start Here
 
-## What You Will See
+The demo is packaged as Terraform because the deployment definition is
+part of the trust story. Terraform creates the CVMs, asks Phala Cloud for
+the measured app definitions, and renders the policy used by admission.
 
-After `terraform apply`, you get:
-
-- three coordinator CVMs
-- three worker CVMs
-- a PostgreSQL cluster managed by Patroni
-- an example `webdemo` service behind the mesh
-- a public HTTPS URL for `webdemo`
-- a public HTTPS URL for the Consul UI
-
-The simplest verification is external:
-
-```bash
-curl "$(terraform -chdir=cluster-example output -raw webdemo_url)/all"
-```
-
-The response is JSON showing calls fanning out from one worker to other
-workers through the private service mesh. You do not need SSH for the
-first check.
-
-## Quick Start
-
-### Prerequisites
-
-For the normal path:
+You need:
 
 - a Phala Cloud account
 - a Phala Cloud API key
 - Terraform
 
-You do not need a Docker Hub account. The example defaults to prebuilt
-GHCR images published by this repository. You only need Docker if you
-want to build custom images locally.
-
-You also should not need to run your own VPS for the long-term product
-path. The mesh needs a rendezvous endpoint so CVMs can find each other;
-that should be provided as shared Phala Cloud infrastructure. Until that
-hosted endpoint is available in your environment, the self-hosted
-coordinator in [`coordinator/`](coordinator/) is the advanced fallback.
-
-### Deploy
+You do not need to build images for the first run. The example points to
+prebuilt GHCR images from this repository. You do not need Docker unless
+you want to build or modify those images.
 
 ```bash
 git clone https://github.com/Dstack-TEE/service-mesh.git
@@ -71,14 +39,13 @@ cp terraform.tfvars.example terraform.tfvars
 $EDITOR terraform.tfvars
 ```
 
-Set:
+Fill in the Phala Cloud gateway and connection-bootstrap settings in
+`terraform.tfvars`. In the product path, the bootstrap endpoint should
+be supplied by Phala Cloud as shared service-mesh infrastructure. If
+your environment does not have that yet, use the self-hosted coordinator
+in [`coordinator/`](coordinator/) and paste its `external_*` values.
 
-- `gateway_domain`
-- the Phala-provided rendezvous settings, or the fallback
-  `external_*` settings from a self-hosted coordinator
-- image references if you are not using the defaults
-
-Then apply:
+Then deploy:
 
 ```bash
 export PHALA_CLOUD_API_KEY=phak_...
@@ -86,134 +53,134 @@ terraform init -upgrade
 terraform apply
 ```
 
-Use an explicit API key for the account you want billed. Do not rely on
-an implicit CLI current profile for production work.
+Attestation admission is enabled by default. A worker gets its mesh
+identity only after the coordinator verifies its dstack evidence against
+the Terraform-rendered policy. For a first smoke test you can set
+`enable_attestation_admission = false`, but that is not the intended
+trust mode.
 
-### Verify
+## Verify The Result
 
-Check the web demo from your laptop:
+The first check should not require SSH. Terraform prints a public URL for
+the demo service:
 
 ```bash
 WEB=$(terraform output -raw webdemo_url)
 curl "$WEB/hello"
+```
+
+That checks that one worker is serving traffic. Now ask that worker to
+call the same service by its internal service name:
+
+```bash
 curl "$WEB/all"
 ```
 
-`/hello` proves the selected worker is serving. `/all` proves that the
-service can call `http://webdemo:8080/hello` through the mesh and reach
-other worker instances by service name.
+The response is JSON. It should contain replies from multiple workers.
+That is the short proof that:
 
-Open the Consul UI:
+- the public gateway reached a CVM,
+- the workload called another workload by service name,
+- the call traveled through the private mesh,
+- the remote workload was admitted into the cluster identity layer.
+
+You can also open the Consul UI:
 
 ```bash
 terraform output -raw consul_ui
 ```
 
-You should see coordinator and worker nodes, plus registered services
-such as `webdemo` and the PostgreSQL service entries.
+Use the UI to see nodes and registered services. For production-profile
+CVMs, assume SSH is unavailable. Prefer public service checks, Phala
+logs, Phala instance metadata, and Terraform outputs. Use SSH only on
+dev images for low-level debugging.
 
-For production-profile CVMs, SSH is usually disabled. Treat external
-service checks, Phala logs, Phala instance metadata, and Terraform
-outputs as the default verification path. Use SSH only on dev images
-when you specifically need in-CVM debugging.
+## What The App Developer Sees
 
-## The Aha Moment
-
-From inside a workload, the mesh feels like normal service discovery:
+Application code does not need peer addresses or leader-election logic.
+It calls stable service names:
 
 ```text
-webdemo -> http://webdemo:8080/hello
-app     -> postgres-master:5432
-app     -> postgres-replica:5432
+http://webdemo:8080
+postgres-master:5432
+postgres-replica:5432
 ```
 
-Your app does not need to know which CVM currently hosts the service.
-It does not need to know peer IPs. It does not need to implement
-leader discovery. It calls a stable service name, and the sidecar routes
-the request to an admitted peer.
+In the PostgreSQL example, `postgres-master` follows the current leader
+and `postgres-replica` reaches read replicas. After a failover, the app
+keeps using the same names.
 
-For a single-CVM dstack app, the trust question is "is this CVM running
-the code I expect?" For a cluster, the extra question is "are all peers
-that join this private system also expected CVMs?" This repo is the
-start of that answer: Terraform declares the workload, dstack measures
-the workload, and attestation admission can check evidence before
-issuing mesh identity.
+That is the main user-facing abstraction: a cluster of attested CVMs
+behaves like a private service environment.
 
-## Running Your Own Service
+## Use Your Own Service
 
-You do not need to understand the whole mesh to add a service. The
-normal workflow is:
+To adapt the example, start with the service you want to run, not with
+the mesh internals.
 
-1. Build or choose your service image.
-2. Add the service container to `compose/worker.yaml`.
-3. Add one service declaration in `cluster-example/cluster.tf`.
-4. Call it by name from other containers.
+For a normal stateless service:
 
-A simple service looks like this:
+1. Put your container in `compose/worker.yaml`.
+2. Add its image variable in `cluster-example/cluster.tf`.
+3. Declare the service name and port.
+4. Call that name from other containers.
+
+Example declaration:
 
 ```hcl
 { name = "api", port = 8080, subset = null }
 ```
 
-Then other containers can call:
+Other workloads can then call:
 
 ```text
 http://api:8080
 ```
 
-For services with roles, declare role-specific names. The PostgreSQL
-example does this:
+For a role-based service, declare the role names your clients should
+use. PostgreSQL uses:
 
 ```hcl
 { name = "postgres-master",  port = 5432, subset = "master"  }
 { name = "postgres-replica", port = 5432, subset = "replica" }
 ```
 
-The app still calls stable names. Patroni and Consul update which peer
-is currently `master` or `replica`.
+The platform sidecar turns those declarations into local routing,
+service registration, and admission policy. Your service should not need
+to know how peers discover each other.
 
-The platform pieces should stay generic:
+## What Is Being Verified
 
-- `cluster-example/cluster.tf` declares services and slots.
-- `compose/worker.yaml` declares workload containers.
-- `mesh-sidecar` turns those declarations into local routing,
-  registration, and mesh policy.
+At admission time, a worker submits dstack evidence to the coordinator.
+The coordinator checks:
 
-## Attestation Admission
+- the TEE quote through `dstack-verifier`,
+- the report-data binding for the claimed workload identity,
+- the KMS identity,
+- the compose hash measured by dstack,
+- the peer name claimed by the workload,
+- and, when `production_profile = true`, the OS image hash.
 
-Attestation admission is optional for first deploys and important for
-the trust story.
+If the evidence matches the Terraform-rendered policy, the coordinator
+issues scoped Consul tokens for that node and service. If it does not
+match, the workload does not get mesh identity.
 
-Enable it in `cluster-example/terraform.tfvars`:
+See [`ATTESTATION.md`](ATTESTATION.md) for the exact report-data format,
+policy fields, and verifier outputs.
 
-```hcl
-enable_attestation_admission = true
-consul_management_token      = "<consul-acl-management-token>"
-dstack_verifier_image        = "dstacktee/dstack-verifier:0.5.9"
-kms                          = "phala"
-```
+## What Is Under The Hood
 
-When enabled, a worker asks for a Consul node or service token only
-after producing dstack evidence. The coordinator-side broker checks the
-quote through `dstack-verifier`, validates report-data binding, checks
-KMS identity, and compares the claimed workload identity, peer id, and
-compose hash against the Terraform-rendered policy.
+You can use the template without operating each layer manually. When you
+need the details, the implementation uses:
 
-For the full trust flow, see [`ATTESTATION.md`](ATTESTATION.md).
+- Terraform for Phala Cloud deployment and policy rendering,
+- Consul for membership and service catalog,
+- Envoy Connect for service-to-service mTLS,
+- Patroni for PostgreSQL failover in the example workload,
+- a small peer transport for private CVM-to-CVM connectivity,
+- dstack attestation plus `dstack-verifier` for admission evidence.
 
-## What Is Inside
-
-The default stack uses proven infrastructure components:
-
-- Terraform for Phala Cloud deployment
-- Consul for membership, service catalog, and service intentions
-- Envoy Connect for service-to-service mTLS
-- Patroni for PostgreSQL leader election and failover
-- `mesh-conn` for private peer connectivity between CVMs
-- dstack attestation and `dstack-verifier` for admission evidence
-
-You do not need to operate these pieces individually for the happy path.
-The Terraform and compose templates wire them together.
+The detailed architecture is in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## Development
 
@@ -224,7 +191,7 @@ terraform -chdir=cluster-example init -upgrade
 terraform -chdir=cluster-example validate
 ```
 
-Run Go tests for the small local modules:
+Run local Go tests:
 
 ```bash
 (cd admission-broker && go test ./...)
@@ -241,7 +208,7 @@ docker run --rm -v "$PWD:/src" -w /src/bootstrap-secrets golang:1.24 go test ./.
 docker run --rm -v "$PWD:/src" -w /src/mesh-conn golang:1.24 go test ./...
 ```
 
-Build the main sidecar image:
+Build the sidecar image:
 
 ```bash
 docker build -t service-mesh-mesh-sidecar-check -f mesh-sidecar/Dockerfile .
@@ -249,9 +216,9 @@ docker build -t service-mesh-mesh-sidecar-check -f mesh-sidecar/Dockerfile .
 
 ## More Docs
 
-- [`ARCHITECTURE.md`](ARCHITECTURE.md): how the mesh layers work.
-- [`ATTESTATION.md`](ATTESTATION.md): report data, KMS checks, verifier
-  output, and verification cost.
+- [`ATTESTATION.md`](ATTESTATION.md): trust flow, report data, KMS
+  checks, and verifier cost.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md): mesh layers and request flow.
 - [`FAILOVER.md`](FAILOVER.md): failover tests and measured recovery
   times.
 - [`ROBUSTNESS.md`](ROBUSTNESS.md): failure modes and mitigations.
@@ -260,12 +227,13 @@ docker build -t service-mesh-mesh-sidecar-check -f mesh-sidecar/Dockerfile .
 
 ## Current Limits
 
-- The easiest user experience depends on a hosted rendezvous endpoint.
+- The easiest user experience depends on a hosted connection-bootstrap
+  endpoint.
   Until that is available in your environment, use the self-hosted
   coordinator fallback in [`coordinator/`](coordinator/).
-- Provider `0.3.0-beta.1` supports stable named slots, but in-place
-  compose/env/image updates in members mode still need the cloud
-  revision redeploy endpoint wired into the provider.
+- Provider `0.3.0-beta.1` supports stable instance management, but
+  in-place compose/env/image updates still need the cloud revision
+  redeploy endpoint wired into the provider.
 - Cluster-wide Patroni and Consul bootstrap secrets are still generated
   by Terraform and stored in tfstate. The planned replacement is
   TEE-rooted secret generation and distribution.

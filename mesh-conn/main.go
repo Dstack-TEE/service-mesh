@@ -743,8 +743,9 @@ func (m *Mesh) dialAndPump(parentCtx context.Context, peer Peer, sess *peerSessi
 // streamUDP headers are matched into udpStreams keyed by port; streamTCP
 // triggers a Dial to <self-vip>:<port> (so it lands on whatever the
 // local Consul / Envoy bound on the peer's own loopback alias). The
-// receiver validates port against the static allowlist; anything
-// else is rejected — that's the only port-knowledge the receiver needs.
+// receiver validates port against the runtime allowlist from
+// MESH_CONN_ALLOWLIST; anything else is rejected — that's the only
+// port-knowledge the receiver needs.
 func runAcceptLoop(ctx context.Context, qconn *quic.Conn, cfg *Config, self *Peer, udpStreams map[int]*quic.Stream, expectedUDP int, allUDPReady chan struct{}) error {
 	udpRegistered := 0
 	for {

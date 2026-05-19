@@ -158,7 +158,7 @@ Look for successful node and service admission in worker sidecar logs:
 
 ```sh
 phala logs --cvm-id <worker-app-id> dstack-sidecar-1 -n 700 |
-  rg 'admission-client-(node|demo|webdemo).*admission accepted'
+  rg 'admission-client-.*admission accepted'
 ```
 
 Look for hard attestation failures:

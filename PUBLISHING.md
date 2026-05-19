@@ -7,15 +7,16 @@ tag (or, better, by digest) and verify provenance with
 `gh attestation verify`.
 
 `mesh-sidecar` is the consolidated platform-plumbing image — a single
-container that runs bootstrap-secrets, mesh-conn, consul, and (on
-workers) envoy. It's the heaviest by a wide margin because it
-inherits from envoyproxy/envoy and bundles three more binaries on top.
+container that runs bootstrap-secrets, mesh-conn, attestation
+admission helpers, consul, and (on workers) envoy. It's the heaviest
+by a wide margin because it inherits from envoyproxy/envoy and bundles
+several more binaries on top.
 
 This doc covers the three paths you'll actually use:
 
 1. **CI publish** (the steady-state)
 2. **Manual one-off publish** (dev iteration / breaking glass)
-3. **Hot-patch on a live cluster** (debugging without a redeploy)
+3. **Hot-patch on a dev cluster** (debugging without a redeploy)
 
 ## 1. CI publish — the steady-state
 
@@ -25,9 +26,10 @@ change, and on PRs touching the same paths. Each run:
 
 - Builds all four images via a matrix job. The `mesh-sidecar` build
   uses `consul-postgres-ha/` as its docker context (instead of
-  `consul-postgres-ha/mesh-sidecar/`) so its Dockerfile can pull
-  `bootstrap-secrets/` and `mesh-conn/` Go sources from sibling
-  directories.
+  `consul-postgres-ha/mesh-sidecar/`) so its Dockerfile can pull the
+  embedded Go components from sibling directories:
+  `bootstrap-secrets/`, `mesh-conn/`, `admission-broker/`, and
+  `admission-client/`.
 - On `main`, pushes to `ghcr.io/dstack-tee/dstack-examples/consul-postgres-ha-<name>` with two tags: the long-form commit SHA (`sha-<40-hex>`) and `latest`.
 - Generates a GitHub Build Provenance attestation per image via
   `actions/attest-build-provenance@v2`. The attestation is signed by
@@ -78,9 +80,11 @@ docker build -t $TAG -f consul-postgres-ha/mesh-sidecar/Dockerfile consul-postgr
 docker push $TAG
 ```
 
-Then point the running cluster at it via `terraform.tfvars`'s
-`mesh_sidecar_image = ...` (and `terraform apply`), or hot-patch the
-running CVM (see §3). `ttl.sh` images expire 24h after push.
+Then use it in `terraform.tfvars` for a fresh dev cluster, or
+hot-patch one SSH-enabled dev CVM (see §3). Existing provider-0.3
+named-slot clusters cannot roll measured image changes in place until
+the revision-redeploy provider path lands. `ttl.sh` images expire 24h
+after push.
 
 ### b) Personal GHCR namespace (persistent, requires PAT)
 
@@ -97,16 +101,13 @@ These manual builds do **not** carry a build-provenance attestation —
 that comes from CI's OIDC identity. For anything user-facing, run the
 real CI workflow.
 
-## 3. Hot-patch on a live cluster — debugging without a redeploy
+## 3. Hot-patch on a dev cluster — debugging without a redeploy
 
-Sometimes you need to swap a binary on a running CVM right now —
-faster than re-running `terraform apply` (which propagates env updates
-correctly as of provider `0.2.0-beta.3`, but still goes per-CVM and
-takes a minute), useful for testing a fix on one CVM before rolling it
-cluster-wide, and the only option on clusters running the older
-`0.2.0-beta.2` provider where in-place env updates silently no-op'd
-(Phala-Network/phala-cloud#246; fixed by
-Phala-Network/terraform-provider-phala#8).
+Sometimes you need to swap a binary on one running CVM right now to
+debug a fix before building a proper image. This is a dev-only path.
+It requires SSH, so it works only on dev OS images; production Phala
+OS images disable SSH. It also bypasses dstack compose measurements,
+so do not use it for attestation or production validation.
 
 ```bash
 GW=dstack-pha-prod5.phala.network
@@ -133,16 +134,18 @@ your tfstate.
 
 ## What to bump after a CI publish
 
-When CI publishes a new `latest` and you want to roll it to a running
-cluster:
+When CI publishes new images:
 
 1. Decide whether you're pinning to `:latest` (drifts) or to the
    `:sha-...` tag from the new run (recommended). Find the new SHA by
    inspecting the workflow run's output or `gh run view`.
-2. Edit `consul-postgres-ha/cluster-example/terraform.tfvars`
-   to that pin.
-3. `terraform apply`. Per-CVM compose re-renders and the dstack agent
-   recreates each service. (Or hot-patch per §3 if you want to verify
-   on one CVM first.)
+2. For a new cluster, edit
+   `consul-postgres-ha/cluster-example/terraform.tfvars` to that pin
+   before `terraform apply`.
+3. For an existing provider-0.3 named-slot cluster, app-level image
+   and compose changes are blocked until the Cloud revision-redeploy
+   endpoint is wired into the provider. Today, use a new cluster or an
+   explicit destroy/recreate for measured changes; use the hot-patch
+   path only for dev smoke testing on a single SSH-enabled CVM.
 4. Verify with `gh attestation verify oci://...@<digest>` if you want
    to be sure the image you're pinning was built by this repo.

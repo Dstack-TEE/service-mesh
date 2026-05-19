@@ -90,9 +90,10 @@ remote peer over the QUIC link. With the 3-service example
 | 8300  | Consul server RPC (server-to-server, client-to-server)| TCP         |
 | 8301  | Consul serf-LAN gossip                                | UDP + TCP   |
 
-The allowlist is intentionally minimal — mesh-conn knows **peers,
-not services**. Apps never dial peer VIPs; only Envoy and Consul-agent
-do, and both speak well-known platform ports.
+The runtime allowlist is intentionally minimal — mesh-conn knows
+**peers, not services**. Apps never dial peer VIPs; only Envoy and
+Consul-agent do. Consul uses fixed platform ports; Envoy sidecar ports
+are generated from `local.services`.
 
 The allowlist is **platform-generated, not Go-const**: per-service
 Connect-sidecar ports come from `local.services` in `cluster.tf`, get
@@ -344,10 +345,10 @@ When a stream opens, the **first 3 bytes** carry a mesh-conn header:
 - `tag = 0x33` → **streamTCP** — per-connection raw TCP byte stream.
 
 The 16-bit `port` is the **receiver's local port to dial / write
-into**. The receiver validates it against the static allowlist
-(`{21000, 21001, 8300, 8301}`); anything else is rejected. There is
-no per-peer port-list lookup — ports are platform-level constants
-the same on every CVM.
+into**. The receiver validates it against `MESH_CONN_ALLOWLIST`; any
+port absent from that runtime allowlist is rejected. There is no
+per-peer port-list lookup — the platform emits the same allowlist on
+every CVM from `local.services` plus Consul's infrastructure ports.
 
 UDP-over-stream uses an explicit 2-byte big-endian length prefix per
 datagram, since QUIC streams are byte-oriented (like yamux was) and
@@ -440,10 +441,10 @@ instead of a generic TCP connect check.
   webdemo, Patroni all think they're on a flat loopback talking to
   services by name. Anything that runs against Consul today (Vault,
   Nomad, Boundary, custom apps) drops in unchanged.
-- **Layer 1 + 2 are a single component (mesh-conn, ~600 LoC Go
-  including the QUIC adapter) and have zero awareness of services.**
-  mesh-conn forwards bytes between peer VIPs on a static infra-port
-  allowlist; it does not know what Consul, Patroni, or Envoy are.
+- **Layer 1 + 2 are a single component (`mesh-conn`) and have zero
+  awareness of services.**
+  mesh-conn forwards bytes between peer VIPs on the runtime allowlist;
+  it does not know what Consul, Patroni, or Envoy are.
   It would equally well move Postgres replication, Redis Sentinel,
   Kafka, etc. — and in fact this example uses it for both Consul
   cluster gossip and Patroni-replication-via-Envoy.

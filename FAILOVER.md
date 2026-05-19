@@ -17,7 +17,12 @@ back.
 
 ## Recipe
 
-Set up env (cluster IDs from `RESUME.md`):
+These recipes require shell access inside the CVMs, so run them on a
+dev-image cluster. Production Phala OS images disable SSH; for those,
+use Phala logs/API evidence unless a separate debug-access path exists.
+
+Set up env with the gateway domain and current worker IDs from your
+Terraform outputs or Phala instance list:
 
 ```bash
 GW=dstack-pha-prod5.phala.network

@@ -127,8 +127,7 @@ consul-postgres-ha/
 ├── mesh-conn/            Go source — QUIC-over-pion/ICE overlay (built into sidecar)
 ├── patroni/              Patroni + Postgres image
 ├── webdemo/              example workload sitting on the mesh
-├── signaling/            HTTP /publish + /poll broker for ICE auth/candidate exchange
-└── quic-on-ice/          standalone smoke test for the QUIC-over-ICE transport
+└── signaling/            HTTP /publish + /poll broker for ICE auth/candidate exchange
 ```
 
 ## Adapting to your own workload
@@ -164,8 +163,8 @@ Say you want a billing service on port 9090 that the existing
    and add a `billing` service to `compose/worker.yaml` (modelled on
    `webdemo` — it just binds `127.0.0.1:9090` and serves).
 
-3. **`terraform apply`**. The provider's in-place env update pushes
-   the new `SERVICES_JSON` to every CVM:
+3. **Deploy the new revision**. For a fresh cluster, `terraform apply`
+   creates CVMs with the new `SERVICES_JSON`:
 
    - `mesh-conn`'s allowlist extends to `{21000, 21001, 21002,
      8300, 8301}` automatically — `MESH_CONN_ALLOWLIST` is computed
@@ -175,6 +174,13 @@ Say you want a billing service on port 9090 that the existing
      supervise loop with `--base-id 3 -admin-bind 127.0.0.1:19002`.
    - Coordinator-0 writes a default-allow intention for `billing`
      and any subset/redirect resolvers implied by the declaration.
+
+   On an existing provider-0.3 named-slot cluster, app-level
+   `docker_compose`, `env`, and `image` mutations are intentionally
+   blocked until the Cloud revision-redeploy endpoint is wired into
+   the Terraform provider. Today that means this kind of service-shape
+   change is a new-cluster or destroy/recreate operation, not an
+   in-place roll.
 
 4. **From any container on any peer**, `curl http://billing:9090/...`
    load-balances across all peers' `billing` instances over Connect

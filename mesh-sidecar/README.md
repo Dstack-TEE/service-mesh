@@ -7,19 +7,20 @@ coordinator CVM runs:
 |--------------------|----------------------------------------------------------|
 | `bootstrap-secrets` | One-shot init: derives per-CVM secrets from the dstack TEE KMS, claims an ordinal, writes `/run/instance/info.json`. |
 | `mesh-conn`         | QUIC-on-pion/ICE overlay: forwards Consul gossip + RPC + HTTP ports between peer CVMs over a NAT'd L3 path. |
+| `admission-broker`  | Coordinator-side TEE quote verifier and Consul ACL token issuer when attestation admission is enabled. |
+| `admission-client`  | Worker-side helper that gets dstack quotes and requests node/service tokens before Consul or Envoy registration. |
 | `consul`            | Server on coordinator CVMs (`-server -bootstrap-expect=N -ui`), client on worker CVMs. Joins via mesh-conn-forwarded loopback ports. |
 | `envoy`             | Connect-mTLS data plane on workers. Bootstrapped from the local consul agent's xDS once it's reachable. Coordinators don't run it. |
 
-Replaces what used to be four separate compose services
-(`bootstrap-secrets`, `mesh-conn`, `consul`, and the old envoy-only
-`sidecar`) plus the legacy `keepalive` placeholder.
+Replaces the earlier split-process layout with one platform sidecar
+that supervises the mesh, Consul, Envoy, and attestation-admission
+helpers together.
 
 The compose-service name stays `sidecar` (so the per-CVM container
 name is `dstack-sidecar-1` regardless of which image it points at);
 the *image* is `consul-postgres-ha-mesh-sidecar`. The "mesh-" prefix
-is meant to make it obvious that this is the bundle of mesh
-plumbing — bootstrap-secrets + mesh-conn + consul + envoy — and not
-just an Envoy sidecar.
+is meant to make it obvious that this is the bundle of mesh plumbing,
+not just an Envoy sidecar.
 
 ## Lifecycle
 
@@ -63,6 +64,7 @@ docker exec dstack-sidecar-1 sh -c 'curl -s http://127.0.0.1:$(jq -r .ports.patr
 ## Build context
 
 CI builds this image with `consul-postgres-ha/` as the docker context
-(not `consul-postgres-ha/mesh-sidecar/`) so the Dockerfile can `COPY
-bootstrap-secrets/` and `COPY mesh-conn/` from sibling directories.
-See `.github/workflows/consul-postgres-ha-publish.yml`.
+(not `consul-postgres-ha/mesh-sidecar/`) so the Dockerfile can `COPY`
+the sibling Go components it embeds: `bootstrap-secrets/`,
+`mesh-conn/`, `admission-broker/`, and `admission-client/`. See
+`.github/workflows/consul-postgres-ha-publish.yml`.

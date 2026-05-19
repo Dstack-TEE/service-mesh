@@ -103,8 +103,7 @@ Provider semantics to preserve:
 
 ## Service Mesh Integration Plan
 
-Once provider support lands and is released or locally pinned for
-testing, update this repo so the real cluster uses slots explicitly.
+Provider support has landed and this repo now uses slots explicitly.
 
 Current mapping:
 
@@ -124,7 +123,7 @@ cleaner future upgrade policy. It also avoids treating compose hash as a
 workload key, since multiple logical workloads may legitimately share
 the same compose hash.
 
-## Agent Handoff
+## Historical Agent Handoff
 
 The following task was sent to agent
 `5219012b-97d5-4d2c-bcbb-a24120e0ac30`:
@@ -142,7 +141,7 @@ HA mesh operation, deterministic rolling replacement, and future
 attestation binding to a Terraform-declared member rather than the
 current concrete CVM.
 
-## Success Criteria
+## Completed Success Criteria
 
 - Terraform provider can manage Phala app slots as first-class stable
   logical members or an equivalently addressable structure.
@@ -154,6 +153,13 @@ current concrete CVM.
   app or instance configuration between unrelated Terraform resources.
 - A real apply/destroy can create the 3-coordinator / 3-worker cluster
   using public or explicitly pinned provider artifacts.
+
+## Remaining Success Criteria
+
+- Slot-preserving revision rollout is wired through the Cloud
+  redeploy endpoint.
+- Rollout tooling can drain, replace, and health-check one slot at a
+  time without losing quorum.
 
 ## Open Questions
 

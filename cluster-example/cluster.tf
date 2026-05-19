@@ -188,8 +188,8 @@ locals {
   # Peer VIPs: 127.50.0.<vip>/32. Allocated as ordinal+1 (so vip=1
   # for the first coordinator, never 0 — the validate_test in
   # mesh-conn rejects vip=0). PEERS_JSON shape: [{id, vip}], same
-  # on every CVM. mesh-conn binds the static infra-port allowlist
-  # ({21000, 21001, 8300, 8301}) on every other peer's VIP.
+  # on every CVM. mesh-conn binds the runtime allowlist emitted by
+  # mesh-sidecar/entrypoint.sh on every other peer's VIP.
   peers = concat(
     [
       for i in range(var.coordinator_replicas) : {

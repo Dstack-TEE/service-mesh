@@ -1,8 +1,8 @@
 # Design docs — open work, intentionally separate from the user-facing docs
 
-This directory holds design briefs for **planned but not-yet-implemented**
-work on `consul-postgres-ha`. Each doc is structured so an agent (or a
-person) can pick it up cold and start implementing.
+This directory holds design briefs and handoff notes for open or
+partially landed work on `consul-postgres-ha`. Each doc is structured
+so an agent (or a person) can pick it up cold and continue.
 
 The user-facing docs (`README.md`, `ARCHITECTURE.md`, `FAILOVER.md`,
 `PUBLISHING.md`, `ROBUSTNESS.md`) describe what's *shipping today*.
@@ -12,8 +12,8 @@ in their face.
 
 | Doc | What |
 |---|---|
-| [`attestation-admission.md`](attestation-admission.md) | Use dstack TEE attestation as the mesh-conn admission credential, replacing/augmenting the shared TURN HMAC. Phased plan: per-app-id first, Consul-KV-rooted policy later. |
-| [`terraform-slot-api.md`](terraform-slot-api.md) | Integrate the Phala Cloud slot API into Terraform so mesh members have stable logical identities across CVM replacement and future attestation policy binding. |
+| [`attestation-admission.md`](attestation-admission.md) | Phase 1 admission is implemented. Remaining work: token lifecycle, non-NAT secret distribution, upgrade policy, and rendezvous hardening. |
+| [`terraform-slot-api.md`](terraform-slot-api.md) | Provider slot resources are implemented and validated. Remaining work: slot-preserving revision rollout through the Cloud redeploy endpoint. |
 
 Each doc includes:
 
@@ -25,5 +25,5 @@ Each doc includes:
 - Success criteria
 - Hand-off instructions
 
-When a doc's work lands, delete the doc (the implementation + the
-user-facing docs are the surviving artifacts).
+When all open work in a doc lands, delete the doc; the implementation
+and user-facing docs are the surviving artifacts.

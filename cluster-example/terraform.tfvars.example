@@ -22,13 +22,13 @@ mesh_sidecar_image = "ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest"
 webdemo_image      = "ghcr.io/dstack-tee/service-mesh/webdemo:latest"
 patroni_image      = "ghcr.io/dstack-tee/service-mesh/patroni:latest"
 
-# NAT traversal bootstrap settings. In the productized path these should
-# come from Phala Cloud managed service-mesh infrastructure. Until that
-# is available in your environment, run coordinator/docker-compose.yaml
-# on a public-IP host and use its values here.
+# NAT traversal bootstrap settings. The public demo bootstrap service
+# should run signaling + STUN only, with TURN relay disabled. Leave
+# external_turn_secret empty for that path. Set it only when using a
+# self-hosted coordinator that intentionally enables TURN fallback.
 # external_coordinator_host  = "<managed-or-self-hosted-bootstrap-host>"
 # external_signaling_url     = "http://<managed-or-self-hosted-bootstrap-host>:7000"
-# external_turn_secret       = "<hex>"
+# external_turn_secret       = ""
 
 # Attestation admission is enabled by default. Terraform generates the
 # Consul management token when consul_management_token is empty.

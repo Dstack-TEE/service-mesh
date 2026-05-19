@@ -144,9 +144,9 @@ func loadConfig() *Config {
 	//   - SELF identity comes from /run/instance/info.json written by
 	//     the bootstrap-secrets init container (which read it from the
 	//     dstack SDK's Info() call). Falls back to PEER_ID env.
-	//   - TURN_SHARED_SECRET comes from /run/secrets/turn (a hex blob
-	//     written by bootstrap-secrets via getKey()). Falls back to
-	//     the env value if the file isn't present.
+	//   - TURN_SHARED_SECRET is optional. When present, mesh-conn also
+	//     tries TURN relay candidates. When absent, mesh-conn uses the
+	//     bootstrap host for STUN only and will not relay traffic.
 	//   - PEERS_JSON still comes via env — cluster.tf computes it from
 	//     the `replicas` count and re-applies on topology change,
 	//     which propagates to every CVM via Phala's in-place compose
@@ -196,7 +196,7 @@ func readSelfID() string {
 	return mustEnv("PEER_ID")
 }
 
-// readTurnSecret resolves the TURN shared secret in priority order:
+// readTurnSecret resolves the optional TURN shared secret in priority order:
 //
 //  1. TURN_SHARED_SECRET env (set when using an external coturn whose
 //     static-auth-secret was configured out-of-band). When this is
@@ -206,16 +206,26 @@ func readSelfID() string {
 //     coordinator's coturn which reads the same file).
 //
 // Order matters: env beats file so that "use external coturn" can be
-// configured purely at the cluster.tf layer.
+// configured purely at the cluster.tf layer. An explicitly empty env
+// value is valid and means STUN-only; no TURN relay credentials are
+// configured.
 func readTurnSecret() string {
-	if v := os.Getenv("TURN_SHARED_SECRET"); v != "" {
+	return readTurnSecretFrom("/run/secrets/turn")
+}
+
+func readTurnSecretFrom(file string) string {
+	if v, ok := os.LookupEnv("TURN_SHARED_SECRET"); ok {
+		if v == "" {
+			log.Printf("turn shared secret explicitly empty; using STUN-only bootstrap")
+			return ""
+		}
 		log.Printf("turn shared secret loaded from TURN_SHARED_SECRET env (%d bytes)", len(v))
 		return v
 	}
-	if b, err := os.ReadFile("/run/secrets/turn"); err == nil {
+	if b, err := os.ReadFile(file); err == nil {
 		s := strings.TrimSpace(string(b))
 		if s != "" {
-			log.Printf("turn shared secret loaded from /run/secrets/turn (%d bytes)", len(s))
+			log.Printf("turn shared secret loaded from %s (%d bytes)", file, len(s))
 			return s
 		}
 	}
@@ -1135,11 +1145,15 @@ func (m *Mesh) dialICE(remoteID string, sess *peerSession, attemptCtx context.Co
 	cfg := m.cfg
 	var urls []*stun.URI
 	if cfg.TurnHost != "" {
-		user, pass := turnCreds(cfg.TurnSecret, time.Hour)
 		urls = []*stun.URI{
 			{Scheme: stun.SchemeTypeSTUN, Host: cfg.TurnHost, Port: 3478, Proto: stun.ProtoTypeUDP},
-			{Scheme: stun.SchemeTypeTURN, Host: cfg.TurnHost, Port: 3478, Proto: stun.ProtoTypeUDP, Username: user, Password: pass},
-			{Scheme: stun.SchemeTypeTURN, Host: cfg.TurnHost, Port: 3478, Proto: stun.ProtoTypeTCP, Username: user, Password: pass},
+		}
+		if cfg.TurnSecret != "" {
+			user, pass := turnCreds(cfg.TurnSecret, time.Hour)
+			urls = append(urls,
+				&stun.URI{Scheme: stun.SchemeTypeTURN, Host: cfg.TurnHost, Port: 3478, Proto: stun.ProtoTypeUDP, Username: user, Password: pass},
+				&stun.URI{Scheme: stun.SchemeTypeTURN, Host: cfg.TurnHost, Port: 3478, Proto: stun.ProtoTypeTCP, Username: user, Password: pass},
+			)
 		}
 	}
 

@@ -2,6 +2,8 @@ package main
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -138,6 +140,38 @@ func TestValidateAllowlist_PortOutOfRange(t *testing.T) {
 				t.Fatalf("want out-of-range error for port=%d, got %v", tc.port, err)
 			}
 		})
+	}
+}
+
+func TestReadTurnSecret_EmptyEnvDisablesFileFallback(t *testing.T) {
+	t.Setenv("TURN_SHARED_SECRET", "")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "turn")
+	if err := os.WriteFile(path, []byte("file-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTurnSecretFrom(path); got != "" {
+		t.Fatalf("empty TURN_SHARED_SECRET should force STUN-only, got %q", got)
+	}
+}
+
+func TestReadTurnSecret_UsesFileWhenEnvUnset(t *testing.T) {
+	old, had := os.LookupEnv("TURN_SHARED_SECRET")
+	t.Cleanup(func() {
+		if had {
+			os.Setenv("TURN_SHARED_SECRET", old)
+		} else {
+			os.Unsetenv("TURN_SHARED_SECRET")
+		}
+	})
+	os.Unsetenv("TURN_SHARED_SECRET")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "turn")
+	if err := os.WriteFile(path, []byte("file-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTurnSecretFrom(path); got != "file-secret" {
+		t.Fatalf("got %q", got)
 	}
 }
 

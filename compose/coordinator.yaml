@@ -61,8 +61,8 @@ services:
       # for retry-join (skipping self).
       - COORDINATOR_VIPS=${COORDINATOR_VIPS}
       # External coordinator path: coordinator mesh-conn uses the same
-      # public coturn + signaling endpoint that workers do, so peer-pair
-      # NAT traversal setup happens in a single shared place.
+      # public bootstrap endpoint that workers do, so peer-pair NAT
+      # traversal setup happens in a single shared place.
       - SIGNALING_URL=${SIGNALING_URL}
       - TURN_HOST=${TURN_HOST}
       - TURN_SHARED_SECRET=${TURN_SHARED_SECRET}

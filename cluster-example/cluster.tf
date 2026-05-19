@@ -144,6 +144,7 @@ variable "external_coordinator_host" { type = string }
 variable "external_signaling_url" { type = string }
 variable "external_turn_secret" {
   type      = string
+  default   = ""
   sensitive = true
 }
 

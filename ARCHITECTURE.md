@@ -11,11 +11,11 @@ on any L3 path. Every CVM NATs out to the same public IP, so even a
 "direct" peer-to-peer flow is hairpinned by the provider edge. The
 only thing the CVMs share is outbound internet egress.
 
-Plus one plain Linux box with a public IP — the **external
-coordinator** — running `coturn` (STUN/TURN) and a tiny HTTP
-signaling broker. This is NAT traversal bootstrap infrastructure only:
-once peers have ICE-handshaked, no data passes through it unless TURN
-relay fallback is required.
+Plus one public NAT traversal bootstrap endpoint running STUN and a tiny
+HTTP signaling broker. This is setup infrastructure only: once peers
+have ICE-handshaked, no data passes through it. A self-hosted
+coordinator can additionally enable TURN relay fallback, but the public
+demo service should leave TURN disabled.
 
 ```
                       coturn + signaling

@@ -41,13 +41,16 @@ $EDITOR terraform.tfvars
 
 Fill in the Phala Cloud gateway and NAT traversal bootstrap settings in
 `terraform.tfvars`. The easiest first-run path should use a public demo
-bootstrap service operated by Phala Cloud. That service lets CVMs
-exchange connection setup messages and discover usable network paths; it
-should not carry application traffic in the normal case.
+bootstrap service operated by Phala Cloud. That demo service should run
+signaling plus STUN only. It lets CVMs exchange connection setup
+messages and discover usable network paths, but it does not provide TURN
+relay capacity and should not carry application traffic.
 
 If a public demo endpoint is not available in your environment yet, use
 the self-hosted coordinator in [`coordinator/`](coordinator/) and paste
-its `external_*` values.
+its `external_*` values. Leave `external_turn_secret` empty for the
+public STUN-only demo service; set it only for a self-hosted coordinator
+where you intentionally enable TURN fallback.
 
 Then deploy:
 
@@ -232,7 +235,8 @@ docker build -t service-mesh-mesh-sidecar-check -f mesh-sidecar/Dockerfile .
 ## Current Limits
 
 - The easiest user experience depends on a hosted NAT traversal
-  bootstrap endpoint.
+  bootstrap endpoint. The public demo endpoint should be STUN-only; TURN
+  relay is a self-hosted or future credentialed service.
   Until that is available in your environment, use the self-hosted
   coordinator fallback in [`coordinator/`](coordinator/).
 - Provider `0.3.0-beta.1` supports stable instance management, but

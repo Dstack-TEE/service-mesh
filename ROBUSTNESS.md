@@ -40,8 +40,8 @@ ours, they're the parts that *must* be made robust by hand.
 
 ### What's there
 
-- one public-IP host running `coturn` (STUN+TURN UDP/TCP) and a Go HTTP
-  signalling broker
+- one public-IP host running STUN and a Go HTTP signalling broker; a
+  self-hosted coordinator may also enable TURN relay fallback
 - the dstack CVMs themselves, which sit behind Phala's provider NAT
 
 ### What can break
@@ -49,19 +49,17 @@ ours, they're the parts that *must* be made robust by hand.
 | failure                           | impact                                                                | recovery |
 | ---                               | ---                                                                   | ---      |
 | Coordinator host dies             | New peers can't bootstrap. **Existing ICE pairs keep working** (no data flows through this box once handshake is done). New retries from existing peers fail until it's back. | bring it back; peers reconnect on their own. |
-| Coordinator ufw / network change  | Same as above.                                                       | restore ports 3478/udp+tcp, 5349/tcp, 7000/tcp, 49152-49999/udp. |
-| TURN shared secret leaks          | Anyone can use the box as an open TURN relay (cost / abuse risk).    | rotate `TURN_SHARED_SECRET` in coordinator + every CVM env, redeploy. |
+| Coordinator firewall / network change | Same as above.                                                    | restore the signaling and STUN ports; if self-hosted TURN is enabled, also restore the TURN relay port range. |
+| TURN shared secret leaks          | Applies only when self-hosted TURN is enabled. Anyone with the secret can use that box as a relay. | rotate `TURN_SHARED_SECRET` in coordinator + every CVM env, redeploy. |
 | Signalling broker is unauthenticated | Any external actor can publish/poll messages, spoof candidates, intercept ICE handshakes. Currently low-impact only because we're solo. | gate `/publish` + `/poll` on attestation-derived identity. |
-| dstack provider NAT changes type (e.g. cone → symmetric) | ICE picks TURN relay path. ~150 ms RTT instead of ~6 ms. **Functionality unchanged.** | none needed; coturn covers this fallback. |
+| dstack provider NAT changes type (e.g. cone to symmetric) | With the public STUN-only demo endpoint, direct connection may fail instead of relaying. With self-hosted TURN enabled, ICE can pick the relay path. | use self-hosted TURN or a future credentialed relay service for environments that need relay fallback. |
 | Underlying CVM dies               | That peer's services drop out. Consul will mark it `failed` after gossip timeout, Envoy LB removes it within seconds. | redeploy; the rest of the cluster is unaffected. |
 
 ### Risk shape
 
-Coordinator host is a **single point of failure for NEW joins** and
-a SPOF for the TURN-relay fallback path. It is **NOT a SPOF for
-established traffic** — established peers ICE-direct and don't
-touch it. So dying coordinator = "no new peers can join, and any pair
-whose direct path goes down can't fail over to TURN until it's back".
+Coordinator host is a **single point of failure for NEW joins**. If
+self-hosted TURN is enabled, it is also a SPOF for the relay fallback
+path. It is **NOT a SPOF for established direct traffic**.
 
 ### Recommended fixes
 
@@ -348,10 +346,11 @@ service_healthy } }` would silence them entirely.
 
 ### Time drift
 
-TURN credentials are time-bound (1-hour TTL in our derivation). If a
-CVM clock drifts more than ~minutes from the coordinator's, TURN auth
-fails. dstack CVMs run NTP so this isn't a real concern, but worth
-noting for the runbook.
+TURN credentials are used only when self-hosted TURN fallback is
+enabled. They are time-bound (1-hour TTL in our derivation). If a CVM
+clock drifts more than a few minutes from the coordinator's, TURN auth
+fails. dstack CVMs run NTP so this is not a real concern, but worth
+noting for that runbook.
 
 ### Configuration drift / inconsistency
 

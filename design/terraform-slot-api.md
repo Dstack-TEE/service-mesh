@@ -8,7 +8,7 @@ Provider beta released; downstream migration validated.
 - Agent worktree:
   `/home/h4x/.paseo/worktrees/1izuidyu/brawny-seahorse`
 - Target repo for provider work: `Phala-Network/terraform-provider-phala`
-- Local consumer repo: `consul-postgres-ha`
+- Local consumer repo: `service-mesh`
 - Provider release artifact: GitHub release `v0.3.0-beta.1`
 - Registry status: indexed by Terraform Registry on 2026-05-19.
 - Consumer status: `cluster-example` initializes with the public
@@ -149,7 +149,7 @@ current concrete CVM.
   identity when available.
 - Existing provider tests still pass.
 - New slot tests cover the intended lifecycle.
-- `consul-postgres-ha/cluster-example` can be updated without copying
+- `cluster-example` can be updated without copying
   app or instance configuration between unrelated Terraform resources.
 - A real apply/destroy can create the 3-coordinator / 3-worker cluster
   using public or explicitly pinned provider artifacts.

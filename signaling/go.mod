@@ -1,4 +1,4 @@
-module github.com/Dstack-TEE/dstack-examples/consul-postgres-ha/signaling
+module github.com/Dstack-TEE/service-mesh/signaling
 
 go 1.22
 

@@ -1,4 +1,4 @@
-# consul-postgres-ha
+# service-mesh
 
 Highly-available PostgreSQL across dstack-TEE CVMs, deployed by `terraform apply`.
 
@@ -70,7 +70,7 @@ Prerequisites:
   choice. See [`PUBLISHING.md`](PUBLISHING.md).
 
 ```bash
-cd consul-postgres-ha/cluster-example
+cd cluster-example
 cp terraform.tfvars.example terraform.tfvars
 $EDITOR terraform.tfvars   # set gateway_domain, image refs, external_*
 
@@ -110,7 +110,7 @@ ready, suspect the suffix.
 ## What's in this directory
 
 ```
-consul-postgres-ha/
+./
 ├── README.md             you are here
 ├── ARCHITECTURE.md       the three-layer stack, peer topology, port plan
 ├── FAILOVER.md           soft-kill / hard-kill / disk-loss recipes + measured RTO
@@ -305,7 +305,7 @@ the platform plumbing untouched.
 | Failover RTO | ~24s soft-kill, ~33s hard-kill (default Patroni `ttl=30`). See [`FAILOVER.md`](FAILOVER.md). |
 | Cheap rejoin | Yes — a recovered ex-leader replays local WAL and rejoins as a streaming replica without pg_basebackup. |
 | Disk-loss rejoin | Yes — Patroni detects empty pgdata and runs full pg_basebackup over the QUIC overlay. |
-| Build provenance | Sigstore-attested via GitHub Build Provenance on every published image. Verify with `gh attestation verify oci://... --repo Dstack-TEE/dstack-examples`. |
+| Build provenance | Sigstore-attested via GitHub Build Provenance on every published image. Verify with `gh attestation verify oci://... --repo Dstack-TEE/service-mesh`. |
 | Attested Consul admission | Optional with `enable_attestation_admission = true`. See [`ATTESTATION.md`](ATTESTATION.md). |
 
 ## Known limitations

@@ -1,5 +1,5 @@
 # Single image containing every platform-plumbing process a
-# consul-postgres-ha CVM runs:
+# service-mesh CVM runs:
 #
 #   bootstrap-secrets  one-shot init, derives per-CVM secrets from the
 #                      dstack KMS and writes /run/instance/info.json
@@ -8,9 +8,9 @@
 #                      worker CVMs)
 #   envoy              Connect mTLS data plane (workers only)
 #
-# Build context is the parent `consul-postgres-ha/` directory so this
-# Dockerfile can COPY both Go sources straight in. CI configures that
-# context via .github/workflows/consul-postgres-ha-publish.yml.
+# Build context is the repository root so this Dockerfile can COPY the
+# sibling Go sources straight in. CI configures that context via
+# .github/workflows/publish.yml.
 #
 # The final stage inherits envoyproxy/envoy because envoy is the
 # largest binary and the only one not statically linked — its base

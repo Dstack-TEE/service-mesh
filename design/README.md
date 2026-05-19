@@ -1,7 +1,7 @@
 # Design docs — open work, intentionally separate from the user-facing docs
 
 This directory holds design briefs and handoff notes for open or
-partially landed work on `consul-postgres-ha`. Each doc is structured
+partially landed work on `service-mesh`. Each doc is structured
 so an agent (or a person) can pick it up cold and continue.
 
 The user-facing docs (`README.md`, `ARCHITECTURE.md`, `FAILOVER.md`,

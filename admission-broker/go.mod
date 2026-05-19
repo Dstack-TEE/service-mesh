@@ -1,3 +1,3 @@
-module github.com/Dstack-TEE/dstack-examples/consul-postgres-ha/admission-broker
+module github.com/Dstack-TEE/service-mesh/admission-broker
 
 go 1.22

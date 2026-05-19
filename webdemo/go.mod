@@ -1,3 +1,3 @@
-module github.com/Dstack-TEE/dstack-examples/consul-postgres-ha/webdemo
+module github.com/Dstack-TEE/service-mesh/webdemo
 
 go 1.22

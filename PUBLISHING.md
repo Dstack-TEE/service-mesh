@@ -20,17 +20,17 @@ This doc covers the three paths you'll actually use:
 
 ## 1. CI publish — the steady-state
 
-`.github/workflows/consul-postgres-ha-publish.yml` runs on push to `main`
+`.github/workflows/publish.yml` runs on push to `main`
 when any of the four image build contexts (or the workflow itself)
 change, and on PRs touching the same paths. Each run:
 
 - Builds all four images via a matrix job. The `mesh-sidecar` build
-  uses `consul-postgres-ha/` as its docker context (instead of
-  `consul-postgres-ha/mesh-sidecar/`) so its Dockerfile can pull the
+  uses the repository root as its docker context (instead of
+  `mesh-sidecar/`) so its Dockerfile can pull the
   embedded Go components from sibling directories:
   `bootstrap-secrets/`, `mesh-conn/`, `admission-broker/`, and
   `admission-client/`.
-- On `main`, pushes to `ghcr.io/dstack-tee/dstack-examples/consul-postgres-ha-<name>` with two tags: the long-form commit SHA (`sha-<40-hex>`) and `latest`.
+- On `main`, pushes to `ghcr.io/dstack-tee/service-mesh/<name>` with two tags: the long-form commit SHA (`sha-<40-hex>`) and `latest`.
 - Generates a GitHub Build Provenance attestation per image via
   `actions/attest-build-provenance@v2`. The attestation is signed by
   Sigstore using a short-lived cert obtained through the workflow's
@@ -45,17 +45,17 @@ change, and on PRs touching the same paths. Each run:
 ```bash
 # By tag (lower assurance — `latest` floats):
 gh attestation verify \
-  oci://ghcr.io/dstack-tee/dstack-examples/consul-postgres-ha-mesh-sidecar:latest \
-  --repo Dstack-TEE/dstack-examples
+  oci://ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest \
+  --repo Dstack-TEE/service-mesh
 
 # By digest (preferred — pinned, won't drift):
 gh attestation verify \
-  oci://ghcr.io/dstack-tee/dstack-examples/consul-postgres-ha-mesh-sidecar@sha256:<digest> \
-  --repo Dstack-TEE/dstack-examples
+  oci://ghcr.io/dstack-tee/service-mesh/mesh-sidecar@sha256:<digest> \
+  --repo Dstack-TEE/service-mesh
 ```
 
 A successful verification proves: this image's digest was attested in a
-GitHub Actions run on `Dstack-TEE/dstack-examples`, with a workflow
+GitHub Actions run on `Dstack-TEE/service-mesh`, with a workflow
 file and commit SHA you can inspect to decide whether to trust it.
 Failed or absent attestations should fail your deploy.
 
@@ -67,16 +67,16 @@ of `latest` doesn't silently swap your cluster's bits.
 
 When iterating fast on the mesh-sidecar (or any other component) you
 don't want to round-trip through CI for every byte. Two equivalent
-shortcuts. Note that `mesh-sidecar` builds from the
-`consul-postgres-ha/` parent dir (it pulls Go sources from sibling
-subdirs); the rest build from their own subdir.
+shortcuts. Note that `mesh-sidecar` builds from the repository root
+(it pulls Go sources from sibling subdirs); the rest build from their
+own subdir.
 
 ### a) `ttl.sh` (24h-disposable, no auth)
 
 ```bash
 TS=$(date +%s)
 TAG=ttl.sh/dstack-mesh-sidecar-${TS}:24h
-docker build -t $TAG -f consul-postgres-ha/mesh-sidecar/Dockerfile consul-postgres-ha
+docker build -t $TAG -f mesh-sidecar/Dockerfile .
 docker push $TAG
 ```
 
@@ -92,8 +92,8 @@ If you want a longer-lived dev image without going through main:
 
 ```bash
 echo "$GITHUB_TOKEN" | docker login ghcr.io -u <your-user> --password-stdin
-TAG=ghcr.io/<your-user>/consul-postgres-ha-mesh-sidecar:dev-$(date +%s)
-docker build -t $TAG -f consul-postgres-ha/mesh-sidecar/Dockerfile consul-postgres-ha
+TAG=ghcr.io/<your-user>/service-mesh/mesh-sidecar:dev-$(date +%s)
+docker build -t $TAG -f mesh-sidecar/Dockerfile .
 docker push $TAG
 ```
 
@@ -140,7 +140,7 @@ When CI publishes new images:
    `:sha-...` tag from the new run (recommended). Find the new SHA by
    inspecting the workflow run's output or `gh run view`.
 2. For a new cluster, edit
-   `consul-postgres-ha/cluster-example/terraform.tfvars` to that pin
+   `cluster-example/terraform.tfvars` to that pin
    before `terraform apply`.
 3. For an existing provider-0.3 named-slot cluster, app-level image
    and compose changes are blocked until the Cloud revision-redeploy

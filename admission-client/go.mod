@@ -1,4 +1,4 @@
-module github.com/Dstack-TEE/dstack-examples/consul-postgres-ha/admission-client
+module github.com/Dstack-TEE/service-mesh/admission-client
 
 go 1.24.0
 

@@ -1,4 +1,4 @@
-# consul-postgres-ha-mesh-sidecar
+# service-mesh mesh-sidecar
 
 The single image that holds every platform-plumbing process a worker or
 coordinator CVM runs:
@@ -18,9 +18,9 @@ helpers together.
 
 The compose-service name stays `sidecar` (so the per-CVM container
 name is `dstack-sidecar-1` regardless of which image it points at);
-the *image* is `consul-postgres-ha-mesh-sidecar`. The "mesh-" prefix
-is meant to make it obvious that this is the bundle of mesh plumbing,
-not just an Envoy sidecar.
+the *image* is `mesh-sidecar` under the `service-mesh` package
+namespace. The name is meant to make it obvious that this is the
+bundle of mesh plumbing, not just an Envoy sidecar.
 
 ## Lifecycle
 
@@ -63,8 +63,8 @@ docker exec dstack-sidecar-1 sh -c 'curl -s http://127.0.0.1:$(jq -r .ports.patr
 
 ## Build context
 
-CI builds this image with `consul-postgres-ha/` as the docker context
-(not `consul-postgres-ha/mesh-sidecar/`) so the Dockerfile can `COPY`
+CI builds this image with the repository root as the docker context
+(not `mesh-sidecar/`) so the Dockerfile can `COPY`
 the sibling Go components it embeds: `bootstrap-secrets/`,
 `mesh-conn/`, `admission-broker/`, and `admission-client/`. See
-`.github/workflows/consul-postgres-ha-publish.yml`.
+`.github/workflows/publish.yml`.

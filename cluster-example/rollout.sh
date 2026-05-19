@@ -179,7 +179,7 @@ What we're waiting on:
     between-slots / drain-leader / wait-for-quorum dance this script
     already implements — is the next step before in-place rolls return.
 
-See consul-postgres-ha/PROGRESS.md for current status.
+See ./PROGRESS.md for current status.
 ==============================================================================
 
 EOF

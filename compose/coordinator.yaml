@@ -17,7 +17,7 @@
 #
 # coturn + signaling that earlier coordinator templates carried have
 # been removed: the cluster uses an external (Vultr) coordinator box
-# for both — see consul-postgres-ha/coordinator/docker-compose.yaml —
+# for both — see coordinator/docker-compose.yaml —
 # configured into each peer's mesh-conn via SIGNALING_URL / TURN_HOST /
 # TURN_SHARED_SECRET. The dstack-coordinator's local copies were never
 # reachable from outside (Phala dstack apps don't have UDP ingress

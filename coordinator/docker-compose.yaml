@@ -27,7 +27,7 @@ services:
       - --fingerprint
 
   signaling:
-    image: ghcr.io/dstack-tee/dstack-examples/consul-postgres-ha-signaling:latest
+    image: ghcr.io/dstack-tee/service-mesh/signaling:latest
     restart: unless-stopped
     command: ["-mode=signaling", "-addr=:7000"]
     ports:

@@ -1,4 +1,4 @@
-module github.com/Dstack-TEE/dstack-examples/consul-postgres-ha/bootstrap-secrets
+module github.com/Dstack-TEE/service-mesh/bootstrap-secrets
 
 go 1.24.0
 

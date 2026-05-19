@@ -316,7 +316,7 @@ depth.
   mesh-conn, so the single-coordinator-failure scenario stays
   operational.
 - **Real registry** — Sigstore-attested GHCR images via
-  `.github/workflows/consul-postgres-ha-publish.yml`. See
+  `.github/workflows/publish.yml`. See
   `PUBLISHING.md`.
 - **Gossip key wired in (workaround)** — `cluster.tf`
   generates a `random_bytes` and broadcasts it to every CVM via
@@ -411,7 +411,7 @@ in attestation rather than handed in by the deployer.
 - **PEERS_JSON validation** — `validatePeers()` runs at startup
   with nine-case unit-test coverage.
 - **Real registry** — Sigstore-attested GHCR images via
-  `.github/workflows/consul-postgres-ha-publish.yml`.
+  `.github/workflows/publish.yml`.
 - **Gossip key + Patroni passwords are now cluster-wide identical
   (workaround)** — generated in Terraform and broadcast to every
   phala_app via env. Attestation-rooted admission will replace

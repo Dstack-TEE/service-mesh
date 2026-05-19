@@ -678,3 +678,8 @@ output "consul_ui" {
   # See README "dstack gateway URL convention".
   value = "https://${phala_app.coordinator.app_id}-8500.${var.gateway_domain}/ui"
 }
+
+output "webdemo_url" {
+  description = "Public gateway URL for the worker webdemo service. Use /hello for one worker and /all to fan out through the mesh."
+  value       = "https://${phala_app.worker.app_id}-8080.${var.gateway_domain}"
+}

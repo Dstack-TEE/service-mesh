@@ -1,346 +1,314 @@
 # service-mesh
 
-Highly-available PostgreSQL across dstack-TEE CVMs, deployed by `terraform apply`.
+Attested service mesh for dstack / Phala Cloud CVMs.
 
-The example shows how to run a stateful workload (HA Postgres via Patroni)
-across CVMs that can't talk to each other directly: the platform NATs
-every CVM to the same public IP, and there's no L3 mesh between them.
-Service-to-service traffic instead rides a userspace overlay
-(`mesh-conn`) that uses pion/ICE for NAT traversal and QUIC for
-reliable, multiplexed streams. On top of that overlay sit Consul (for
-service discovery + leader election KV), Patroni (for Postgres
-leader/replica orchestration), and Envoy sidecars (for Connect mTLS).
+This repository contains a working HA PostgreSQL deployment that runs
+across dstack TEE CVMs using Terraform, Consul, Envoy Connect, Patroni,
+and a QUIC-over-ICE transport. It is meant to be both a runnable example
+and a starting point for teams that want private service-to-service
+networking, stable Terraform-managed slots, and attestation-gated service
+admission.
 
-You can use this as-is for a 3-replica Patroni cluster, or as a
-template — swap Patroni for any other stateful workload, the rest of
-the platform plumbing keeps working unchanged.
+## What You Get
 
-## Architecture in one paragraph
+- A 3-coordinator / 3-worker Phala Cloud deployment driven by
+  `terraform apply`.
+- Consul server quorum, Consul clients, Envoy Connect sidecars, and
+  Patroni-managed PostgreSQL.
+- A userspace mesh transport for CVMs that do not have direct L3
+  connectivity.
+- Stable named slots through `phala_app` + `phala_app_instance` in the
+  Terraform provider.
+- Optional dstack attestation admission before workers receive Consul
+  node and service tokens.
+- CI-ready image publishing to GHCR with GitHub Build Provenance.
 
-Three **coordinator** CVMs run a Consul server quorum (Raft). Three
-**worker** CVMs run Patroni + Postgres + a Consul client agent +
-two Envoy Connect sidecars. All six are dstack-TEE CVMs hosted
-behind a provider NAT. One **external coordinator** (a regular Linux
-box with a public IP) runs coturn (STUN/TURN) plus a tiny signaling
-broker — that's the rendezvous infrastructure each CVM uses to find
-peers' ICE candidates; no data ever passes through it once peers
-connect. Per-CVM and per-cluster secrets are split: the TURN HMAC is
-derived per-CVM from dstack KMS, while cluster-wide-identical
-material (gossip key, Patroni passwords) is generated in Terraform
-and broadcast via env until the later TEE-derived secret phase lands.
-Connect CA uses Consul's built-in CA provider — root in Raft, no
-external derivation needed.
+The included workload is HA Postgres, but the mesh plumbing is designed
+to be workload-neutral. Replace Patroni with another stateful service,
+declare its ports in Terraform, and keep the same Consul, Envoy, mesh,
+and admission structure.
 
-For the full topology and layering walkthrough, see
-[`ARCHITECTURE.md`](ARCHITECTURE.md).
+## Status
 
-For current project status and remaining work across Terraform,
-mesh transport, Consul, Patroni, and attestation, see
-[`PROGRESS.md`](PROGRESS.md).
+This is an active engineering project. The current code has been tested
+against real Phala Cloud clusters with provider
+`phala-network/phala v0.3.0-beta.1`.
 
-### The three address spaces (you'll see these everywhere)
+Recently validated:
 
-Apps and operators run into three loopback ranges in this example. Knowing
-which one to use is most of the mental model:
+- Named-slot Terraform apply, no-op plan, and destroy with the public
+  provider.
+- Direct mesh connectivity enabled by default.
+- Consul quorum, Consul clients, Envoy Connect, and Patroni failover.
+- Real dstack attestation admission for worker node and service tokens.
+- Production-profile OS hash checks through `dstack-verifier`.
 
-| Range | What it means | Who binds it | Who dials it |
-|---|---|---|---|
-| `127.0.0.1:<port>` | "The local instance of this service on *this* CVM." Postgres on `:5432`, Consul HTTP on `:8500`, Patroni REST on `:8008`, etc. — every CVM binds the same canonical ports. | The app process itself (Patroni, Consul, webdemo). | The local Envoy sidecar (and ad-hoc debugging via `docker exec`). |
-| `127.10.0.<svc>:<port>` | "A service I consume." One per Connect upstream declared in `cluster.tf`. The `/etc/hosts` file maps service names (`postgres-master`, `webdemo`) to these. | The **local Envoy sidecar**, one listener per declared upstream. | **Your app**. App calls `postgres-master:5432` → `getaddrinfo` → `127.10.0.20:5432` → Envoy → remote service. |
-| `127.50.0.<peer>:<port>` | "A peer's loopback, reachable via mesh-conn over QUIC." Platform-internal: only Envoy-public listeners and Consul agents ever talk here. | `mesh-conn` (per-peer aliases) + the local Consul/Envoy on its self-VIP. | **Never app code.** Envoy uses it to reach remote sidecars (`:21000`/`:21001`); Consul uses it for serf gossip (`:8301`) and Raft RPC (`:8300`). |
+Known gaps are tracked in [`PROGRESS.md`](PROGRESS.md). The largest
+remaining items are slot-aware in-place revision rollout, stronger
+secret lifecycle, longer soak testing, and upgrade policy.
 
-App code only ever uses the first two. The peer plane is platform plumbing
-that the example sets up automatically — adding a service to your app's
-upstream list in `cluster.tf` is enough to make `service:port` work from
-inside the app.
+## Quick Start
 
-## Quick start (~5 minutes after image push)
+### 1. Prepare Images
 
-Prerequisites:
+You need four images:
 
-- A Phala Cloud API key for the account you want this cluster billed to.
-  Get one from the Phala dashboard (Settings → API Keys) or use the
-  one already in your `~/.phala-cloud/credentials.json` profile if
-  you've used `phala` CLI before — but **pick a specific token**,
-  don't let it follow whatever profile is currently selected.
-- A Linux box with a public IP for the external coordinator (coturn + signaling).
-- The four container images (`mesh-sidecar`, `patroni`, `webdemo`,
-  `signaling`) either already published to GHCR (via the CI workflow
-  on this repo's main branch) or pushed by you to a registry of your
-  choice. See [`PUBLISHING.md`](PUBLISHING.md).
+- `mesh-sidecar`
+- `patroni`
+- `webdemo`
+- `signaling`
+
+The normal path is the GitHub Actions workflow in
+[`.github/workflows/publish.yml`](.github/workflows/publish.yml), which
+publishes to:
+
+```text
+ghcr.io/dstack-tee/service-mesh/mesh-sidecar
+ghcr.io/dstack-tee/service-mesh/patroni
+ghcr.io/dstack-tee/service-mesh/webdemo
+ghcr.io/dstack-tee/service-mesh/signaling
+```
+
+For local iteration, see [`PUBLISHING.md`](PUBLISHING.md).
+
+### 2. Start The External Coordinator
+
+The CVMs use a small external coordinator for ICE rendezvous:
+
+- `coturn` for STUN/TURN
+- `signaling` for candidate exchange
+
+Run it on a Linux host with a public IP:
+
+```bash
+cd coordinator
+cp .env.example .env
+$EDITOR .env
+docker compose up -d
+```
+
+Set the public host, TURN credentials, and signaling URL in
+`cluster-example/terraform.tfvars` before applying Terraform.
+
+### 3. Deploy The Cluster
 
 ```bash
 cd cluster-example
 cp terraform.tfvars.example terraform.tfvars
-$EDITOR terraform.tfvars   # set gateway_domain, image refs, external_*
+$EDITOR terraform.tfvars
+```
 
-# Set this explicitly to a specific account's token. Do NOT auto-pull
-# from credentials.json's `current_profile` — that follows whichever
-# account you last `phala auth login`-ed into, and a wrong-account
-# deploy is silent until you spot it in the dashboard.
+Set at least:
+
+- `gateway_domain`
+- `external_signaling_url`
+- `external_coordinator_host`
+- `external_turn_secret`
+- image references for `mesh_sidecar_image`, `patroni_image`, and
+  `webdemo_image`
+
+Export a specific Phala Cloud API key for the account you want billed:
+
+```bash
 export PHALA_CLOUD_API_KEY=phak_...
-
 terraform init -upgrade
 terraform apply
 ```
 
-Once apply finishes, the cluster is HA Postgres on
-`coordinator_replicas + worker_replicas` CVMs. From inside any
-worker CVM, connect to the current leader as
-`psql -h postgres-master -p 5432` — the local Envoy upstream
-listener proxies via Connect mTLS to whichever CVM Patroni has
-elected leader. `postgres-replica:5432` reaches any non-leader for
-read-only queries.
+Do not rely on an implicit CLI "current profile" for production work.
+Use an explicit API key so a deploy cannot silently target the wrong
+account.
 
-### dstack gateway URL convention
+### 4. Verify The Cluster
 
-Two forms, easy to confuse:
+After `terraform apply`, the workers expose Postgres through local
+Envoy upstream listeners:
 
-| Form | Behavior | Use when |
-|---|---|---|
-| `<app-id>-<port>.<gateway-domain>` | Gateway terminates TLS using a pre-issued wildcard cert and forwards plain HTTP to `<port>` on the CVM. | The backend speaks plain HTTP (Consul HTTP API on `:8500`, Patroni REST on `:8008`, webdemo on `:8080`). |
-| `<app-id>-<port>s.<gateway-domain>` | Gateway does TLS pass-through — encrypted bytes go straight to `<port>`. | The backend speaks TLS itself (Envoy public mTLS listener on `:21000` or `:21001`). |
-
-Picking the wrong form fails permanently. Plain-HTTP backend with the
-`s` form yields `SSL_ERROR_SYSCALL` early and `wrong version number`
-once routing is live; trivially mistakable for a transient gateway
-provisioning delay. If the URL doesn't work after ~2 min from CVM
-ready, suspect the suffix.
-
-## What's in this directory
-
-```
-./
-├── README.md             you are here
-├── ARCHITECTURE.md       the three-layer stack, peer topology, port plan
-├── FAILOVER.md           soft-kill / hard-kill / disk-loss recipes + measured RTO
-├── PROGRESS.md           project status, recently validated flows, open work
-├── PUBLISHING.md         CI publish flow, manual ttl.sh shortcuts, hot-patch
-├── ROBUSTNESS.md         where each layer breaks + mitigations
-│
-├── cluster-example/      one cluster.tf — opinionated worked example
-├── compose/              coordinator.yaml + worker.yaml templates
-├── coordinator/          docker-compose for the external coordinator (coturn + signaling)
-│
-├── mesh-sidecar/         consolidated platform sidecar image (bootstrap-secrets + mesh-conn + consul + envoy)
-├── bootstrap-secrets/    Go source — TEE-derives per-CVM secrets (built into sidecar)
-├── mesh-conn/            Go source — QUIC-over-pion/ICE overlay (built into sidecar)
-├── patroni/              Patroni + Postgres image
-├── webdemo/              example workload sitting on the mesh
-└── signaling/            HTTP /publish + /poll broker for ICE auth/candidate exchange
+```bash
+psql -h postgres-master -p 5432
+psql -h postgres-replica -p 5432
 ```
 
-## Adapting to your own workload
+From a coordinator, Consul should show all coordinators and workers:
 
-The mesh is **declarative**: `local.services` in `cluster.tf` is the
-single source of truth, and the platform sidecar generates Consul
-registrations, Envoy supervise loops, loopback aliases, `/etc/hosts`
-entries, and `mesh-conn`'s peer-VIP allowlist from it. Adding a
-microservice is one HCL block plus an image; no edits to `mesh-conn`,
-the sidecar entrypoint, your app's source, or the CI workflow.
+```bash
+consul members
+consul operator raft list-peers
+```
 
-### Add a service: worked example
+For failover tests and expected recovery times, see
+[`FAILOVER.md`](FAILOVER.md).
 
-Say you want a billing service on port 9090 that the existing
-`webdemo` calls into. End-to-end:
+## Development
 
-1. **Declare it in `cluster.tf`** — append one entry to
-   `local.services`:
+This repository is a multi-component project. Useful checks:
 
-   ```hcl
-   services_raw = [
-     { name = "webdemo",          port = 8080, subset = null    },
-     { name = "postgres-master",  port = 5432, subset = "master" },
-     { name = "postgres-replica", port = 5432, subset = "replica" },
-     { name = "billing",          port = 9090, subset = null    },  # ← new
-   ]
-   ```
+```bash
+terraform -chdir=cluster-example init -upgrade
+terraform -chdir=cluster-example validate
+```
 
-   This is the only edit to the platform.
+```bash
+(cd admission-broker && go test ./...)
+(cd signaling && go test ./...)
+(cd webdemo && go test ./...)
+```
 
-2. **Add the image** to `terraform.tfvars` (`billing_image = "..."`),
-   wire a `BILLING_IMAGE` variable + env entry on `phala_app.worker`,
-   and add a `billing` service to `compose/worker.yaml` (modelled on
-   `webdemo` — it just binds `127.0.0.1:9090` and serves).
+Some Go modules require the same Go version used by the image build.
+Run them through Docker when your host Go is older:
 
-3. **Deploy the new revision**. For a fresh cluster, `terraform apply`
-   creates CVMs with the new `SERVICES_JSON`:
+```bash
+docker run --rm -v "$PWD:/src" -w /src/admission-client golang:1.24 go test ./...
+docker run --rm -v "$PWD:/src" -w /src/bootstrap-secrets golang:1.24 go test ./...
+docker run --rm -v "$PWD:/src" -w /src/mesh-conn golang:1.24 go test ./...
+```
 
-   - `mesh-conn`'s allowlist extends to `{21000, 21001, 21002,
-     8300, 8301}` automatically — `MESH_CONN_ALLOWLIST` is computed
-     from `SERVICES_JSON` in `mesh-sidecar/entrypoint.sh`.
-   - Workers provision `127.10.0.13/32 dev lo`, append
-     `127.10.0.13 billing` to `/etc/hosts`, and start a third Envoy
-     supervise loop with `--base-id 3 -admin-bind 127.0.0.1:19002`.
-   - Coordinator-0 writes a default-allow intention for `billing`
-     and any subset/redirect resolvers implied by the declaration.
+Build the main sidecar image from the repository root:
 
-   On an existing provider-0.3 named-slot cluster, app-level
-   `docker_compose`, `env`, and `image` mutations are intentionally
-   blocked until the Cloud revision-redeploy endpoint is wired into
-   the Terraform provider. Today that means this kind of service-shape
-   change is a new-cluster or destroy/recreate operation, not an
-   in-place roll.
+```bash
+docker build -t service-mesh-mesh-sidecar-check -f mesh-sidecar/Dockerfile .
+```
 
-4. **From any container on any peer**, `curl http://billing:9090/...`
-   load-balances across all peers' `billing` instances over Connect
-   mTLS. No application-side service-discovery code.
+## Repository Map
 
-### What the convention does for you
+```text
+.
++-- cluster-example/      Terraform cluster definition
++-- compose/              dstack compose templates for coordinators/workers
++-- coordinator/          External coturn + signaling deployment
++-- mesh-sidecar/         Runtime sidecar image and entrypoint
++-- mesh-conn/            QUIC-over-ICE peer transport
++-- bootstrap-secrets/    dstack/KMS bootstrap helper
++-- admission-broker/     Coordinator-side attestation admission service
++-- admission-client/     Workload-side admission client
++-- patroni/              PostgreSQL + Patroni image
++-- webdemo/              Small example service behind Connect
++-- signaling/            ICE candidate exchange service
++-- design/               Longer design notes and future work
+```
 
-| Field on each entry | What it controls |
+Core docs:
+
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) explains the mesh layers, address
+  spaces, and service flow.
+- [`ATTESTATION.md`](ATTESTATION.md) documents report data, evidence
+  policy, KMS checks, and verifier cost.
+- [`FAILOVER.md`](FAILOVER.md) covers soft kill, hard kill, disk loss,
+  and measured RTO.
+- [`ROBUSTNESS.md`](ROBUSTNESS.md) lists failure modes by layer.
+- [`PUBLISHING.md`](PUBLISHING.md) explains image publishing and
+  provenance verification.
+- [`PROGRESS.md`](PROGRESS.md) tracks project state and remaining work.
+
+## Architecture Snapshot
+
+The cluster has three planes:
+
+| Plane | Purpose |
 |---|---|
-| `name` | Consul service name + `/etc/hosts` alias. Apps dial `${name}:${port}`. |
-| `port` | Canonical app port. App binds `127.0.0.1:port`. Two entries sharing a port collapse onto one **backend** (one Envoy supervise loop, one `sidecar_port`, one Connect-mTLS endpoint) — that's how `postgres-master` and `postgres-replica` ride the same Patroni instance. |
-| `subset` | Optional Consul service-subset filter (matches `Service.Tags`). Each subset-bearing entry generates a redirect resolver to the parent backend. Patroni's role-watcher (in `patroni/entrypoint.sh`) updates those tags on role flips. |
+| External coordinator | Public rendezvous for ICE candidates and STUN/TURN. It is not in the data path after direct peers connect, except when TURN relay is unavoidable. |
+| Peer mesh | `mesh-conn` creates pairwise ICE connections and runs QUIC streams across them. |
+| Service mesh | Consul and Envoy Connect provide discovery, mTLS, intentions, and service-level routing. |
 
-VIP octets and `sidecar_port` numbers are computed in HCL from
-declaration order — first service gets `vip=10 sidecar_port=21000`,
-second `vip=11 sidecar_port=21001`, and so on. Plan-time validation
-catches duplicate `(name, subset)` tuples.
+Applications do not call peer IPs directly. They bind local ports and
+call service names such as `postgres-master:5432`. The sidecar maps
+those names to local Envoy upstream listeners, and Envoy reaches remote
+sidecars through the peer mesh.
 
-### Two patterns: Consul-blind vs. Consul-native workloads
+### Address Spaces
 
-A workload's relationship to Consul determines how its service-mesh
-entry is shaped. Two patterns cover the realistic cases:
+| Range | Meaning | Used by |
+|---|---|---|
+| `127.0.0.1:<port>` | Local service on this CVM. | App processes, Consul, Envoy, Patroni. |
+| `127.10.0.<svc>:<port>` | Local Envoy upstream for a service name. | Application clients. |
+| `127.50.0.<peer>:<port>` | Remote peer loopback reached through `mesh-conn`. | Envoy and Consul only. |
 
-#### Pattern A — Consul-blind workload (`webdemo` is the example)
+App code should only use `127.0.0.1` and service names. The
+`127.50.0.0/24` peer plane is platform plumbing.
 
-The app is a plain process that listens on a port. It doesn't know
-Consul exists; it never opens a connection to the local Consul agent;
-it has no leader/follower concept. The **platform sidecar** registers
-the service on the app's behalf, with the canonical port as the
-backend and a standalone Connect-proxy in front of it. There's only
-one parent service, named the same as the entry, no subsets.
+## Adapting Your Workload
 
-Declaration:
+Workloads are declared in `cluster-example/cluster.tf`. The important
+input is `local.services`, which drives:
+
+- Consul service names
+- Envoy upstream listeners
+- `/etc/hosts` aliases
+- `mesh-conn` peer allowlists
+- service VIP allocation
+
+A simple Consul-blind service usually needs one entry:
 
 ```hcl
 { name = "webdemo", port = 8080, subset = null }
 ```
 
-This is the default for "I just wrote a microservice and I want it on
-the mesh." If you have no opinions about leader election, this is the
-shape to use.
-
-#### Pattern B — Consul-native workload (`patroni` is the example)
-
-The app integrates with Consul as part of how it operates — Patroni
-uses Consul's KV store as its leader-election lock and registers
-itself in Consul's service catalog under its `scope` (which we set to
-`CLUSTER_NAME` = `"demo"`). On every failover, Patroni rewrites tags
-(`master` / `replica`) on its own registration. From a single parent
-service we get *multiple* logical names — one per role — each as a
-service-resolver that filters the parent's tags into the subset its
-consumer wants:
+A Consul-native workload with roles can expose logical service names
+through subsets. Patroni uses this pattern:
 
 ```hcl
 { name = "postgres-master",  port = 5432, subset = "master"  }
 { name = "postgres-replica", port = 5432, subset = "replica" }
 ```
 
-Two entries, same canonical port → one Envoy public listener shared
-across both, two service-resolvers with different subset filters. The
-platform sidecar does **not** register a parent for this case (Patroni
-already did it); it only stamps the Connect sidecar-proxy. The
-role-watcher in `patroni/entrypoint.sh` is the loop that maintains
-tag consistency between Patroni's view of leadership and Consul's
-catalog.
+Two entries sharing a port collapse onto one backend listener, while
+Consul service resolvers choose the right subset at runtime.
 
-Failover round-trips through this in <1 second:
+Only two areas should usually be workload-specific:
 
+- the workload image and entrypoint
+- the workload service/env block in `compose/worker.yaml`
+
+The sidecar and mesh transport should not need per-workload code.
+
+## Attestation Admission
+
+Set this in `cluster-example/terraform.tfvars`:
+
+```hcl
+enable_attestation_admission = true
+consul_management_token      = "<consul-acl-management-token>"
+dstack_verifier_image        = "dstacktee/dstack-verifier:0.5.9"
+kms                          = "phala"
 ```
-Patroni promotes worker-5 to leader
-      ↓
-worker-5's role-watcher writes Tags=["master"] on worker-5's sidecar
-      ↓
-Consul EDS push: subset master = [worker-5's sidecar:21001]
-      ↓
-every consumer's Envoy retargets `postgres-master` to worker-5
-      ↓
-next psql connection lands on worker-5
-```
 
-No DNS update, no service deregistration, no client-side retry-loop.
-That's what `subset` buys you, and it's why this field exists in our
-config even though only one of the three example services uses it.
+The admission broker verifies dstack evidence through
+`dstack-verifier`, checks report-data binding, validates KMS identity,
+and matches the claimed workload identity, peer id, and compose hash
+against the Terraform-rendered policy before issuing Consul ACL tokens.
 
-#### When to pick which
+Use digest-pinned images and a versioned verifier tag for production.
+The detailed trust flow is in [`ATTESTATION.md`](ATTESTATION.md).
 
-| Question | Pattern A | Pattern B |
-|---|---|---|
-| Does your workload have a built-in Consul integration? | No | Yes |
-| Does your workload register itself with Consul? | No — platform does | Yes — workload does |
-| Does your workload have leader election? | No | Probably yes |
-| Will tags on the service change at runtime? | No | Yes (the workload rewrites them) |
-| Number of `local.services` entries per workload? | One | One per role |
-| Need a `subset` field? | No (`subset = null`) | One per role |
+## dstack Gateway URL Convention
 
-If you're not sure, you're probably building Pattern A. Pattern B is
-specifically for "this thing has its own opinions about leader
-election that need to surface to consumers" — Patroni, Vault, Nomad,
-custom raft-based services.
+Two gateway forms are used when debugging services from outside the
+CVM:
 
-### Workload-specific pieces remaining
-
-Only two files contain workload-specific logic after this refactor:
-
-| Workload-specific | Lives in |
+| Form | Behavior |
 |---|---|
-| The Patroni image itself + role-watcher loop | `patroni/` |
-| Patroni env block (`CLUSTER_NAME`, replication passwords, etc.) | `compose/worker.yaml` |
+| `<app-id>-<port>.<gateway-domain>` | Gateway terminates TLS and forwards plain HTTP to the CVM port. |
+| `<app-id>-<port>s.<gateway-domain>` | Gateway does TLS pass-through to a backend that speaks TLS itself. |
 
-`mesh-sidecar/entrypoint.sh` contains zero per-workload code paths —
-grep it for `patroni` or `webdemo` and you get nothing. To run
-something other than Patroni (Redis, Kafka, your own service): replace
-the `patroni` compose service and image with your own, edit
-`local.services` to declare its names + ports, and leave the rest of
-the platform plumbing untouched.
+Use the plain form for Consul HTTP, Patroni REST, and `webdemo`. Use
+the `s` form only for ports where the backend already speaks TLS, such
+as Envoy public mTLS listeners.
 
-## Key operational properties
+## Current Limits
 
-| | |
-|---|---|
-| Slot add/remove | With provider `phala-network/phala 0.3.0-beta.1+`, replica count changes map to stable named slots; adding or removing a slot does not disturb the remaining slots. |
-| Failover RTO | ~24s soft-kill, ~33s hard-kill (default Patroni `ttl=30`). See [`FAILOVER.md`](FAILOVER.md). |
-| Cheap rejoin | Yes — a recovered ex-leader replays local WAL and rejoins as a streaming replica without pg_basebackup. |
-| Disk-loss rejoin | Yes — Patroni detects empty pgdata and runs full pg_basebackup over the QUIC overlay. |
-| Build provenance | Sigstore-attested via GitHub Build Provenance on every published image. Verify with `gh attestation verify oci://... --repo Dstack-TEE/service-mesh`. |
-| Attested Consul admission | Optional with `enable_attestation_admission = true`. See [`ATTESTATION.md`](ATTESTATION.md). |
+- Provider `0.3.0-beta.1` supports stable named slots, but app-level
+  compose/env/image changes in members mode still need the cloud
+  revision redeploy endpoint wired into the provider.
+- The low-level rendezvous path uses TURN HMAC today. Attestation
+  gates Consul/Connect identity, not ICE signaling admission.
+- Cluster-wide Patroni and Consul bootstrap secrets are still generated
+  by Terraform and stored in tfstate. The planned replacement is
+  TEE-rooted secret generation/distribution.
+- Broker-issued Consul tokens are currently long-lived. Short TTLs need
+  explicit renewal and reload paths for Consul, Envoy, and Patroni.
+- Production Phala OS images disable SSH. Prod-profile validation
+  should use Phala logs and APIs rather than in-CVM shell commands.
 
-## Known limitations
+## License
 
-* Provider `0.3.0-beta.1` named-slot support is indexed by Terraform
-  Registry and the cluster example has been validated with the public
-  provider. Keep the exact beta pin until the slot model has soaked
-  under real traffic.
-* App-level `docker_compose`, `env`, and `image` updates are blocked
-  in provider `0.3.0-beta.1` members mode. Slot add/remove is safe;
-  in-place rolling revisions need the cloud revision redeploy endpoint
-  wired into the provider.
-* Prod OS images disable SSH. Production-profile attestation tests
-  should validate through Phala instance metadata, `phala ps`, and
-  logs; use a dev image for tests that require direct `consul` or
-  `patronictl` commands inside the CVM.
-* The low-level mesh-conn rendezvous story is **shared-secret based
-  today** (TURN HMAC), not attestation-based. Consul/Connect
-  admission can be gated by TEE attestation with
-  `enable_attestation_admission = true`; replacing rendezvous auth is
-  separate work.
-* The cluster's gossip key, Patroni superuser password, and
-  replication password are **generated in Terraform and broadcast
-  via env to every CVM** — a workaround, because those bytes live
-  in `terraform.tfstate` and pass through whoever runs `apply`. The
-  attestation-rooted secret design
-  ([`design/attestation-admission.md`](design/attestation-admission.md))
-  replaces this with TEE-derived material that no human ever sees.
-
-## Filed upstream
-
-* [`Phala-Network/terraform-provider-phala#5`](https://github.com/Phala-Network/terraform-provider-phala/issues/5)
-  — `storage_fs` triggers ForceNew when unset; we explicitly pin
-  `storage_fs = "zfs"` in `cluster.tf`.
-* [`Phala-Network/phala-cloud#243`](https://github.com/Phala-Network/phala-cloud/issues/243)
-  — per-instance Terraform resource landed in provider
-  `0.3.0-beta.1`; revision rollout policy still needs provider support
-  for the cloud `/apps/{app_id}/revisions/{rev_id}/redeploy` path.
+Apache-2.0. See [`LICENSE`](LICENSE).

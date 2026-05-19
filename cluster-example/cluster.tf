@@ -133,10 +133,10 @@ variable "os_image" {
   description = "Optional Phala base OS image slug. Required when production_profile is true so the launch config and admission policy share the same explicit OS root."
 }
 
-# External coordinator (Vultr coturn + signaling box). Used until
-# Phala admin enables UDP ingress on dstack apps; once that lands we
-# can host coturn + signaling inside the dstack mesh and drop these
-# external_* vars.
+# External coordinator (public-IP coturn + signaling host). Used until
+# Phala enables UDP ingress on dstack apps; once that lands we can host
+# coturn + signaling inside the dstack mesh and drop these external_*
+# vars.
 variable "external_coordinator_host" { type = string }
 variable "external_signaling_url" { type = string }
 variable "external_turn_secret" {

@@ -40,8 +40,8 @@ ours, they're the parts that *must* be made robust by hand.
 
 ### What's there
 
-- one public-IP host (currently `155.138.146.255`, Vultr) running
-  `coturn` (STUN+TURN UDP/TCP) and a Go HTTP signalling broker
+- one public-IP host running `coturn` (STUN+TURN UDP/TCP) and a Go HTTP
+  signalling broker
 - the dstack CVMs themselves, which sit behind Phala's provider NAT
 
 ### What can break

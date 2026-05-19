@@ -199,10 +199,9 @@ func readSelfID() string {
 // readTurnSecret resolves the TURN shared secret in priority order:
 //
 //  1. TURN_SHARED_SECRET env (set when using an external coturn whose
-//     static-auth-secret was configured out-of-band — e.g. the Vultr
-//     coordinator path). When this is present it MUST win, because
-//     the local TEE-derived value won't match what coturn is checking
-//     against.
+//     static-auth-secret was configured out-of-band). When this is
+//     present it MUST win, because the local TEE-derived value won't
+//     match what coturn is checking against.
 //  2. /run/secrets/turn (TEE-derived path; matches the embedded
 //     coordinator's coturn which reads the same file).
 //

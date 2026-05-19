@@ -16,13 +16,13 @@
 #                      Connect-mTLS workload.
 #
 # coturn + signaling that earlier coordinator templates carried have
-# been removed: the cluster uses an external (Vultr) coordinator box
-# for both — see coordinator/docker-compose.yaml —
-# configured into each peer's mesh-conn via SIGNALING_URL / TURN_HOST /
-# TURN_SHARED_SECRET. The dstack-coordinator's local copies were never
-# reachable from outside (Phala dstack apps don't have UDP ingress
-# yet), so they were dead code burning CPU. When/if UDP ingress lands,
-# re-adding them is one small PR.
+# been removed: the cluster uses an external public-IP coordinator for
+# both. See coordinator/docker-compose.yaml. It is configured into each
+# peer's mesh-conn via SIGNALING_URL / TURN_HOST / TURN_SHARED_SECRET.
+# The dstack-coordinator's local copies were never reachable from
+# outside (Phala dstack apps don't have UDP ingress yet), so they were
+# dead code burning CPU. When/if UDP ingress lands, re-adding them is
+# one small PR.
 #
 # Per-CVM secrets policy: nothing on the persisted disk holds secret
 # material. /run/secrets/* is tmpfs (gone on reboot, re-derived on
@@ -60,8 +60,8 @@ services:
       # Comma-separated VIPs of all coordinators — entrypoint uses these
       # for retry-join (skipping self).
       - COORDINATOR_VIPS=${COORDINATOR_VIPS}
-      # External coordinator path — coordinator's mesh-conn uses the
-      # same Vultr coturn + signaling that workers do, so peer-pair
+      # External coordinator path: coordinator mesh-conn uses the same
+      # public coturn + signaling endpoint that workers do, so peer-pair
       # ICE rendezvous happens in a single shared place.
       - SIGNALING_URL=${SIGNALING_URL}
       - TURN_HOST=${TURN_HOST}

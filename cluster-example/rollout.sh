@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
 # Workload-aware rolling update driver.
 #
-# Until phala-cloud#243 lands `phala_app.update_policy`, the platform's
-# in-place app update touches all replicas in unspecified order. That's
-# fine for stateless workers but dangerous for the Consul quorum (and
-# any other leader-bearing workload). This script drives the rollout
-# from outside Terraform with workload-aware drains between replica
-# updates.
+# STATUS (provider 0.3.0-beta.1): app-level docker_compose / env / image
+# updates on a phala_app in members (MIG) mode are intentionally blocked
+# at plan time by the provider. The per-CVM PATCH endpoints would only
+# mutate the bootstrap slot and leave the other slots on the old
+# revision; until the cloud exposes an app-revision-aware update path
+# that targets every slot atomically, this script's central premise
+# (per-app `terraform apply` to roll all replicas) doesn't work.
+#
+# The wait_for_quorum_healthy + snapshot helpers below are still useful
+# scaffolding for the eventual slot-aware rollout, so they're kept.
+# The execution section is now a clear error rather than a silent
+# half-update.
 #
 # Usage:
-#   ./rollout.sh                       # full rolling update (apply per-app, gated)
-#   ./rollout.sh --app worker          # roll only the worker app
-#   ./rollout.sh --plan                # show what would happen, don't apply
+#   ./rollout.sh --plan                # snapshot + plan (no apply)
+#   ./rollout.sh                       # currently exits with a guidance message
 #
 # Requires:
 #   PHALA_CLOUD_API_KEY env (or terraform `phala` provider config)
@@ -48,13 +53,13 @@ done
 CONSUL_BASE=""
 
 resolve_consul_base() {
-  # `coordinator_app_ids` is a map keyed by ordinal as a string.
-  # We pick coord-0 by convention; any coord agent serves the HTTP
-  # API equally well.
+  # `coordinator_app_id` is now a single string (all coordinators share
+  # one app under provider 0.3 MIG model). Any coord agent serves the
+  # HTTP API equally well, and the gateway URL uses the single app_id.
   local coord_id
-  coord_id=$(terraform output -json coordinator_app_ids 2>/dev/null | jq -r '."0" // empty')
+  coord_id=$(terraform output -raw coordinator_app_id 2>/dev/null || echo "")
   if [[ -z "$coord_id" ]]; then
-    echo "ERROR: terraform output coordinator_app_ids[\"0\"] missing; run terraform apply at least once" >&2
+    echo "ERROR: terraform output coordinator_app_id missing; run terraform apply at least once" >&2
     exit 1
   fi
   # `<port>` (no trailing 's') — gateway terminates TLS, backend is
@@ -143,33 +148,39 @@ if $PLAN_ONLY; then
   exit 0
 fi
 
-# For now: a single `terraform apply` triggers Phala's in-place app
-# update for every changed app. Until per-instance updates are
-# available (phala-cloud#243), we can only gate at the app boundary.
-#
-# Apply order: workers first (stateless mostly; if one fails we still
-# have the others), coordinator last (it's the Consul server, biggest
-# blast radius).
+cat >&2 <<'EOF'
 
-APPS_TO_ROLL=()
-if [[ -z "$APP_FILTER" || "$APP_FILTER" == "worker" ]]; then
-  APPS_TO_ROLL+=("phala_app.worker")
-fi
-if [[ -z "$APP_FILTER" || "$APP_FILTER" == "coordinator" ]]; then
-  APPS_TO_ROLL+=("phala_app.coordinator")
-fi
+==============================================================================
+rollout.sh: in-place rolling app updates are not supported under provider
+0.3.0-beta.1. The provider intentionally refuses at plan time to mutate
+app-level fields (docker_compose, env, image, …) on a phala_app in
+members mode, because the per-CVM PATCH endpoints would only update the
+bootstrap slot and leave the other slots on the old revision.
 
-for app in "${APPS_TO_ROLL[@]}"; do
-  echo "=== applying ${app} ==="
-  terraform apply -auto-approve -target="${app}"
-  echo "=== waiting for cluster to settle ==="
-  if ! wait_for_quorum_healthy "$EXPECTED"; then
-    echo "ERROR: cluster did not return to all-alive within ${HEALTH_TIMEOUT_SECONDS}s after ${app}" >&2
-    echo "snapshot saved at start of rollout; restore via consul snapshot restore" >&2
-    exit 1
-  fi
-  echo "=== ${app}: green ==="
-done
+What works today:
 
-echo "rollout complete; final state:"
-curl -sf "${CONSUL_BASE}/v1/agent/members" | jq -r '.[] | .Name + " " + (.Status|tostring)'
+  * Add a slot:    bump var.worker_replicas (or coordinator_replicas) and
+                   run `terraform apply` — the provider creates only the
+                   new slot; existing slots keep their vm_uuids.
+  * Remove a slot: lower the replicas count; only the high-ordinal slot
+                   is destroyed.
+
+What does NOT work (yet):
+
+  * Roll a new docker compose / env / image across slots: the provider
+    will plan-fail with "Unsafe update in members mode". Workaround is
+    destroy + recreate (loses disks).
+
+What we're waiting on:
+
+  * Cloud-side fan-out: the `/apps/{app_id}/revisions/{rev}/redeploy`
+    endpoint (vm_uuids=[…]) does support slot-preserving revision
+    rollouts. Wiring it into the provider — with the kind of pause-
+    between-slots / drain-leader / wait-for-quorum dance this script
+    already implements — is the next step before in-place rolls return.
+
+See consul-postgres-ha/PROGRESS.md for current status.
+==============================================================================
+
+EOF
+exit 2

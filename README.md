@@ -80,8 +80,8 @@ $EDITOR terraform.tfvars   # set gateway_domain, image refs, external_*
 # deploy is silent until you spot it in the dashboard.
 export PHALA_CLOUD_API_KEY=phak_...
 
-terraform init
-terraform apply -parallelism=1   # phala-cloud#247 needs serial creates
+terraform init -upgrade
+terraform apply
 ```
 
 Once apply finishes, the cluster is HA Postgres on
@@ -295,7 +295,7 @@ the platform plumbing untouched.
 
 | | |
 |---|---|
-| In-place env updates | Yes — change image tags or env values, `terraform apply`, CVMs update without losing pgdata. Requires provider `phala-network/phala 0.2.0-beta.4+`. |
+| Slot add/remove | With provider `phala-network/phala 0.3.0-beta.1+`, replica count changes map to stable named slots; adding or removing a slot does not disturb the remaining slots. |
 | Failover RTO | ~24s soft-kill, ~33s hard-kill (default Patroni `ttl=30`). See [`FAILOVER.md`](FAILOVER.md). |
 | Cheap rejoin | Yes — a recovered ex-leader replays local WAL and rejoins as a streaming replica without pg_basebackup. |
 | Disk-loss rejoin | Yes — Patroni detects empty pgdata and runs full pg_basebackup over the QUIC overlay. |
@@ -304,10 +304,18 @@ the platform plumbing untouched.
 
 ## Known limitations
 
-* Each `terraform apply` that fans out more than 1 `phala_app` create
-  in parallel hits
-  [`phala-cloud#247`](https://github.com/Phala-Network/phala-cloud/issues/247)
-  — use `-parallelism=1` for now (~5 min × N to bring-up).
+* Provider `0.3.0-beta.1` named-slot support is indexed by Terraform
+  Registry and the cluster example has been validated with the public
+  provider. Keep the exact beta pin until the slot model has soaked
+  under real traffic.
+* App-level `docker_compose`, `env`, and `image` updates are blocked
+  in provider `0.3.0-beta.1` members mode. Slot add/remove is safe;
+  in-place rolling revisions need the cloud revision redeploy endpoint
+  wired into the provider.
+* Prod OS images disable SSH. Production-profile attestation tests
+  should validate through Phala instance metadata, `phala ps`, and
+  logs; use a dev image for tests that require direct `consul` or
+  `patronictl` commands inside the CVM.
 * The low-level mesh-conn rendezvous story is **shared-secret based
   today** (TURN HMAC), not attestation-based. Consul/Connect
   admission can be gated by TEE attestation with
@@ -326,12 +334,7 @@ the platform plumbing untouched.
 * [`Phala-Network/terraform-provider-phala#5`](https://github.com/Phala-Network/terraform-provider-phala/issues/5)
   — `storage_fs` triggers ForceNew when unset; we explicitly pin
   `storage_fs = "zfs"` in `cluster.tf`.
-* [`Phala-Network/phala-cloud#247`](https://github.com/Phala-Network/phala-cloud/issues/247)
-  — concurrent `phala_app` creates against the same workspace return
-  `400 "configuration parameters not compatible"`. Workaround:
-  `terraform apply -parallelism=1`.
-* [`Phala-Network/phala-cloud#242`](https://github.com/Phala-Network/phala-cloud/issues/242)
-  — `phala cvms list` collapses replicas to one entry.
 * [`Phala-Network/phala-cloud#243`](https://github.com/Phala-Network/phala-cloud/issues/243)
-  — per-instance Terraform resource + `update_policy` + lifecycle
-  hooks would let `cluster-example/rollout.sh` collapse into HCL.
+  — per-instance Terraform resource landed in provider
+  `0.3.0-beta.1`; revision rollout policy still needs provider support
+  for the cloud `/apps/{app_id}/revisions/{rev_id}/redeploy` path.

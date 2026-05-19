@@ -117,6 +117,7 @@ type InfraPort struct {
 
 type Config struct {
 	SelfID       string
+	ClusterName  string
 	Peers        []Peer
 	Allowlist    []InfraPort
 	SignalingURL string
@@ -153,6 +154,7 @@ func loadConfig() *Config {
 
 	cfg := &Config{
 		SelfID:       readSelfID(),
+		ClusterName:  mustEnv("CLUSTER_NAME"),
 		SignalingURL: strings.TrimRight(mustEnv("SIGNALING_URL"), "/"),
 		TurnHost:     os.Getenv("TURN_HOST"),
 		TurnSecret:   readTurnSecret(),
@@ -358,6 +360,10 @@ func (c *Config) peerByID(id string) *Peer {
 		}
 	}
 	return nil
+}
+
+func (c *Config) signalingPeerID(peerID string) string {
+	return c.ClusterName + "/" + peerID
 }
 
 func mustEnv(k string) string {
@@ -1355,7 +1361,7 @@ type Message struct {
 
 func publish(cfg *Config, to, typ, data string) error {
 	body, _ := json.Marshal(Message{From: cfg.SelfID, Type: typ, Data: data})
-	resp, err := http.Post(cfg.SignalingURL+"/publish?to="+url.QueryEscape(to),
+	resp, err := http.Post(cfg.SignalingURL+"/publish?to="+url.QueryEscape(cfg.signalingPeerID(to)),
 		"application/json", strings.NewReader(string(body)))
 	if err != nil {
 		return err
@@ -1377,7 +1383,7 @@ func (m *Mesh) pollLoop(ctx context.Context) {
 		}
 		req, _ := http.NewRequestWithContext(ctx,
 			http.MethodGet,
-			cfg.SignalingURL+"/poll?peer="+url.QueryEscape(cfg.SelfID),
+			cfg.SignalingURL+"/poll?peer="+url.QueryEscape(cfg.signalingPeerID(cfg.SelfID)),
 			nil)
 		resp, err := client.Do(req)
 		if err != nil {

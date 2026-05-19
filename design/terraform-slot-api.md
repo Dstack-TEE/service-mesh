@@ -2,13 +2,18 @@
 
 ## Status
 
-Handoff in progress.
+Provider beta released; downstream migration validated.
 
 - Paseo agent: `5219012b-97d5-4d2c-bcbb-a24120e0ac30`
 - Agent worktree:
   `/home/h4x/.paseo/worktrees/1izuidyu/brawny-seahorse`
-- Target repo for provider work: `Phala-Network/phala-cloud`
+- Target repo for provider work: `Phala-Network/terraform-provider-phala`
 - Local consumer repo: `consul-postgres-ha`
+- Provider release artifact: GitHub release `v0.3.0-beta.1`
+- Registry status: indexed by Terraform Registry on 2026-05-19.
+- Consumer status: `cluster-example` initializes with the public
+  provider, validates, applies a real 3-coordinator / 3-worker
+  named-slot cluster, refreshes to a no-op plan, and destroys cleanly.
 
 This note exists so we can recover the slot-management context even if
 the Paseo logs are not immediately available.
@@ -101,12 +106,15 @@ Provider semantics to preserve:
 Once provider support lands and is released or locally pinned for
 testing, update this repo so the real cluster uses slots explicitly.
 
-Expected mapping:
+Current mapping:
 
-- `coordinator-1`, `coordinator-2`, `coordinator-3` are stable slots.
-- `worker-1`, `worker-2`, `worker-3` are stable slots.
+- `${cluster}-coordinator-0`, `${cluster}-coordinator-1`, and
+  `${cluster}-coordinator-2` are stable coordinator slots.
+- `${cluster}-worker-1`, `${cluster}-worker-2`, and
+  `${cluster}-worker-3` are stable worker slots.
 - The Consul node name and mesh `peer_id` should be derived from the
-  Terraform slot, not from a generated VM identifier.
+  Terraform-declared ordinal env, not from a generated VM identifier
+  or cloud-returned list ordering.
 - Admission policy should continue to verify compose hash as revision
   evidence and should later bind the quoted identity to the
   platform-stable slot or instance evidence exposed by Phala Cloud.
@@ -149,12 +157,9 @@ current concrete CVM.
 
 ## Open Questions
 
-- Does the released API expose slot replacement as a separate operation
-  or as an update/create behavior?
-- Which fields belong to `phala_app` versus an instance or slot
-  resource?
-- Can import be stable on `app_id/slot`, or does the API require an
-  internal ID?
+- Does `/apps/{app_id}/revisions/{rev_id}/redeploy` preserve slot
+  names and `vm_uuid`s during compose revision rollout, or does it
+  recreate CVMs under the hood?
 - Does the API expose enough stable evidence to bind future attestation
   admission to the slot directly?
 - What is the migration path from the current deployment state to
@@ -162,9 +167,8 @@ current concrete CVM.
 
 ## Next Local Steps After Agent Callback
 
-- Review the provider patch and Terraform shape.
-- Update this repo's provider version or local override for testing.
-- Wire `cluster-example` coordinator and worker definitions to slots.
-- Run public-provider or pinned-provider real cluster apply/destroy.
-- Update `PROGRESS.md` with the tested status and delete this design
-  note once the work lands.
+- Test the cloud revision redeploy endpoint against a small MIG and
+  decide whether the provider can safely lift the compose-update
+  guardrail in a later beta.
+- Run a longer slot-managed cluster soak with attestation admission
+  enabled and stable Patroni leader/replica health.

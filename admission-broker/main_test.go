@@ -13,6 +13,7 @@ import (
 )
 
 const testHash = "1434154969cb663afc5a73393b84cc31a1319ab6c65c9766fadd0c86bb59ef37"
+const testOSHash = "2434154969cb663afc5a73393b84cc31a1319ab6c65c9766fadd0c86bb59ef37"
 const testKMSKey = "aabbccddeeff00112233445566778899"
 
 func TestPolicyMatchAllowsSharedComposeHashPerIdentity(t *testing.T) {
@@ -133,6 +134,30 @@ func TestPolicyNormalizesKMSKeyProvider(t *testing.T) {
 	}
 	if policy.KMS.ID != testKMSKey {
 		t.Fatalf("wrong kms id: %s", policy.KMS.ID)
+	}
+}
+
+func TestPolicyNormalizesOSImageHash(t *testing.T) {
+	policy := mustPolicy(t, `{
+	  "cluster": "demo",
+	  "policy_epoch": 1,
+	  "os_image": {"image": "prod-image", "hash": "0x`+testOSHash+`"},
+	  "workloads": [{
+	    "workload_id": "demo/worker/0/webdemo",
+	    "identity": "spiffe://demo/webdemo",
+	    "consul_service": "webdemo",
+	    "allowed_compose_hashes": ["`+testHash+`"]
+	  }]
+	}`)
+
+	if policy.OSImage == nil {
+		t.Fatal("os_image policy was not parsed")
+	}
+	if policy.OSImage.Image != "prod-image" {
+		t.Fatalf("wrong os image: %s", policy.OSImage.Image)
+	}
+	if policy.OSImage.Hash != testOSHash {
+		t.Fatalf("wrong os image hash: %s", policy.OSImage.Hash)
 	}
 }
 
@@ -321,6 +346,75 @@ func TestAttestRejectsKMSMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if body["code"] != "KMS_POLICY_MISMATCH" {
+		t.Fatalf("wrong error body: %+v", body)
+	}
+}
+
+func TestAttestRejectsOSImageMismatch(t *testing.T) {
+	var expectedReportData string
+	verifier := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"is_valid": true,
+			"details": map[string]any{
+				"quote_verified":         true,
+				"event_log_verified":     true,
+				"os_image_hash_verified": true,
+				"os_image_hash":          "3434154969cb663afc5a73393b84cc31a1319ab6c65c9766fadd0c86bb59ef37",
+				"report_data":            expectedReportData,
+				"app_info":               map[string]string{"compose_hash": testHash},
+			},
+		})
+	}))
+	defer verifier.Close()
+
+	s := &Server{
+		policy:      mustPolicy(t, `{"cluster":"demo","policy_epoch":1,"os_image":{"image":"prod-image","hash":"`+testOSHash+`"},"workloads":[{"workload_id":"demo/worker/0/webdemo","identity":"spiffe://demo/webdemo","consul_service":"webdemo","allowed_compose_hashes":["`+testHash+`"]}]}`),
+		nonces:      NewNonceStore(time.Minute),
+		verifier:    &VerifierClient{URL: verifier.URL, HTTP: verifier.Client()},
+		issuer:      &recordingIssuer{token: "secret-token"},
+		tokenTTL:    time.Hour,
+		now:         func() time.Time { return time.Unix(100, 0).UTC() },
+		nonceRandom: bytes.NewReader(bytes.Repeat([]byte{0x22}, 32)),
+	}
+	ts := httptest.NewServer(s.routes())
+	defer ts.Close()
+
+	challengeResp, err := http.Post(ts.URL+"/v1/admission/challenge", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var challenge struct {
+		Nonce string `json:"nonce"`
+	}
+	if err := json.NewDecoder(challengeResp.Body).Decode(&challenge); err != nil {
+		t.Fatal(err)
+	}
+	_ = challengeResp.Body.Close()
+
+	statement := `{"identity":"spiffe://demo/webdemo","peer_id":"worker-1"}`
+	expectedReportData, err = reportDataHex(hex.EncodeToString([]byte(statement)), challenge.Nonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf, _ := json.Marshal(map[string]any{
+		"identity":    "spiffe://demo/webdemo",
+		"binding":     hex.EncodeToString([]byte(statement)),
+		"nonce":       challenge.Nonce,
+		"attestation": "aabbcc",
+	})
+	resp, err := http.Post(ts.URL+"/v1/admission/attest", "application/json", bytes.NewReader(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["code"] != "OS_IMAGE_POLICY_MISMATCH" {
 		t.Fatalf("wrong error body: %+v", body)
 	}
 }

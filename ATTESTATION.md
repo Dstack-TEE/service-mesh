@@ -109,6 +109,8 @@ as:
 - `app_info.compose_hash` present and policy-allowed
 - `app_info.key_provider_info` present and equal to the policy-pinned
   KMS provider id
+- when `production_profile = true`, `os_image_hash_verified == true`
+  and `os_image_hash` equals the Terraform preflight hash
 
 KMS identity should be policy-controlled because it defines the key
 lifecycle. This example pins the long-term KMS public key in
@@ -128,9 +130,13 @@ configuration. The Terraform default matches the example's default
 `kms = "phala"` backend; override it when changing KMS backend.
 
 For production profiles, OS image identity should also be checked.
-The expected OS image hash should be both a Terraform launch setting
-and an admission policy field, so a workload cannot satisfy the
-compose policy while running on an unexpected base image.
+This example makes that an explicit profile: set
+`production_profile = true` and an `os_image` name such as
+`dstack-0.5.7`. Terraform uses that image in the Phala launch config,
+reads the resulting
+`os_image_hash` from preflight, and emits that SHA-256 hash into the
+admission policy. The broker then requires `dstack-verifier` to prove
+the same OS image hash before issuing Consul ACL tokens.
 
 ## Runtime Checks
 
@@ -163,6 +169,12 @@ phala logs --cvm-id <worker-app-id> dstack-sidecar-1 -n 700 |
 ```
 
 No output from the failure grep is expected.
+
+Production Phala OS images disable SSH access. For prod-profile runs,
+use Phala instance metadata, `phala ps`, and public logs to validate
+OS hash, container health, and admission success. Use a dev image only
+when the test specifically requires in-CVM `consul` or `patronictl`
+commands.
 
 ## Current Limits
 

@@ -305,11 +305,12 @@ depth.
 
 ### Already shipped
 
-- **Three Consul servers** — landed in commit `17f4642`. The
-  coordinator app deploys with `replicas = 3` and Consul agents on
-  those CVMs run as servers with `bootstrap_expect = 3`. Workers
-  retry-join through every coordinator's serf port via mesh-conn,
-  so the single-coordinator-failure scenario stays operational.
+- **Three Consul servers** — landed in commit `17f4642`; the current
+  Terraform model deploys three stable coordinator slots, and Consul
+  agents on those CVMs run as servers with `bootstrap_expect = 3`.
+  Workers retry-join through every coordinator's serf port via
+  mesh-conn, so the single-coordinator-failure scenario stays
+  operational.
 - **Real registry** — Sigstore-attested GHCR images via
   `.github/workflows/consul-postgres-ha-publish.yml`. See
   `PUBLISHING.md`.
@@ -401,9 +402,8 @@ in attestation rather than handed in by the deployer.
   "Already shipped" for the failure analysis and the regression test.
 - **Auth-channel reconnect deadlock** — fixed via fresh
   `peerSession{}` per `dialICE` + drain-then-push on `authCh`.
-- **Three-server Consul** — coordinator deploys with
-  `replicas = 3`; Consul agents run as servers with
-  `bootstrap_expect = 3`.
+- **Three-server Consul** — coordinator deploys three stable named
+  slots; Consul agents run as servers with `bootstrap_expect = 3`.
 - **PEERS_JSON validation** — `validatePeers()` runs at startup
   with nine-case unit-test coverage.
 - **Real registry** — Sigstore-attested GHCR images via

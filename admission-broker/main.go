@@ -79,6 +79,7 @@ type Policy struct {
 	Cluster     string     `json:"cluster"`
 	PolicyEpoch int        `json:"policy_epoch"`
 	KMS         *KMSPolicy `json:"kms,omitempty"`
+	OSImage     *OSPolicy  `json:"os_image,omitempty"`
 	Workloads   []Workload `json:"workloads"`
 
 	byIdentity map[string][]Workload
@@ -87,6 +88,11 @@ type Policy struct {
 type KMSPolicy struct {
 	Name string `json:"name"`
 	ID   string `json:"id"`
+}
+
+type OSPolicy struct {
+	Image string `json:"image,omitempty"`
+	Hash  string `json:"hash"`
 }
 
 type Workload struct {
@@ -125,6 +131,14 @@ func ParsePolicy(b []byte) (*Policy, error) {
 		if err := normalizeKeyProviderInfo(p.KMS); err != nil {
 			return nil, fmt.Errorf("kms: %w", err)
 		}
+	}
+	if p.OSImage != nil {
+		hash, err := normalizeSHA256Hex(p.OSImage.Hash)
+		if err != nil {
+			return nil, fmt.Errorf("os_image.hash: %w", err)
+		}
+		p.OSImage.Hash = hash
+		p.OSImage.Image = strings.TrimSpace(p.OSImage.Image)
 	}
 	if len(p.Workloads) == 0 {
 		return nil, errors.New("workloads must not be empty")
@@ -211,7 +225,32 @@ func (p *Policy) CheckKMS(verified *VerifiedQuote) error {
 	return nil
 }
 
+func (p *Policy) CheckOSImage(verified *VerifiedQuote) error {
+	if p.OSImage == nil {
+		return nil
+	}
+	if !verified.OSImageHashVerified {
+		return errors.New("verifier did not verify os_image_hash")
+	}
+	if verified.OSImageHash == "" {
+		return errors.New("verifier response missing os_image_hash")
+	}
+	if verified.OSImageHash != p.OSImage.Hash {
+		return fmt.Errorf("os image hash mismatch: got %s want %s",
+			shortHex(verified.OSImageHash), shortHex(p.OSImage.Hash))
+	}
+	return nil
+}
+
 func normalizeComposeHash(h string) (string, error) {
+	h, err := normalizeSHA256Hex(h)
+	if err != nil {
+		return "", err
+	}
+	return h, nil
+}
+
+func normalizeSHA256Hex(h string) (string, error) {
 	h = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(h), "0x"))
 	if len(h) != 64 {
 		return "", fmt.Errorf("expected 32-byte hex hash, got %d hex chars", len(h))
@@ -347,6 +386,10 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.policy.CheckKMS(verified); err != nil {
 		writeError(w, http.StatusForbidden, "KMS_POLICY_MISMATCH", err.Error())
+		return
+	}
+	if err := s.policy.CheckOSImage(verified); err != nil {
+		writeError(w, http.StatusForbidden, "OS_IMAGE_POLICY_MISMATCH", err.Error())
 		return
 	}
 
@@ -496,12 +539,14 @@ type VerifyRequest struct {
 }
 
 type VerifiedQuote struct {
-	Valid       bool
-	Reason      string
-	ComposeHash string
-	AppID       string
-	ReportData  string
-	KeyProvider *KMSPolicy
+	Valid               bool
+	Reason              string
+	ComposeHash         string
+	AppID               string
+	ReportData          string
+	KeyProvider         *KMSPolicy
+	OSImageHash         string
+	OSImageHashVerified bool
 }
 
 type VerifierClient struct {
@@ -534,25 +579,31 @@ func (c *VerifierClient) Verify(ctx context.Context, req VerifyRequest) (*Verifi
 	}
 
 	var parsed struct {
-		IsValid          bool   `json:"is_valid"`
-		QuoteVerified    bool   `json:"quote_verified"`
-		EventLogVerified bool   `json:"event_log_verified"`
-		Error            string `json:"error"`
-		Reason           string `json:"reason"`
-		ReportData       string `json:"report_data"`
-		AppInfo          struct {
+		IsValid             bool   `json:"is_valid"`
+		QuoteVerified       bool   `json:"quote_verified"`
+		EventLogVerified    bool   `json:"event_log_verified"`
+		OSImageHashVerified bool   `json:"os_image_hash_verified"`
+		Error               string `json:"error"`
+		Reason              string `json:"reason"`
+		ReportData          string `json:"report_data"`
+		OSImageHash         string `json:"os_image_hash"`
+		AppInfo             struct {
 			AppID       string `json:"app_id"`
 			ComposeHash string `json:"compose_hash"`
 			KeyProvider string `json:"key_provider_info"`
+			OSImageHash string `json:"os_image_hash"`
 		} `json:"app_info"`
 		Details struct {
-			QuoteVerified    bool   `json:"quote_verified"`
-			EventLogVerified bool   `json:"event_log_verified"`
-			ReportData       string `json:"report_data"`
-			AppInfo          struct {
+			QuoteVerified       bool   `json:"quote_verified"`
+			EventLogVerified    bool   `json:"event_log_verified"`
+			OSImageHashVerified bool   `json:"os_image_hash_verified"`
+			ReportData          string `json:"report_data"`
+			OSImageHash         string `json:"os_image_hash"`
+			AppInfo             struct {
 				AppID       string `json:"app_id"`
 				ComposeHash string `json:"compose_hash"`
 				KeyProvider string `json:"key_provider_info"`
+				OSImageHash string `json:"os_image_hash"`
 			} `json:"app_info"`
 		} `json:"details"`
 	}
@@ -562,10 +613,17 @@ func (c *VerifierClient) Verify(ctx context.Context, req VerifyRequest) (*Verifi
 
 	quoteVerified := parsed.QuoteVerified || parsed.Details.QuoteVerified
 	eventLogVerified := parsed.EventLogVerified || parsed.Details.EventLogVerified
+	osImageHashVerified := parsed.OSImageHashVerified || parsed.Details.OSImageHashVerified
 	reportData := firstNonEmpty(parsed.ReportData, parsed.Details.ReportData)
 	appID := firstNonEmpty(parsed.AppInfo.AppID, parsed.Details.AppInfo.AppID)
 	composeHashRaw := firstNonEmpty(parsed.AppInfo.ComposeHash, parsed.Details.AppInfo.ComposeHash)
 	keyProviderRaw := firstNonEmpty(parsed.AppInfo.KeyProvider, parsed.Details.AppInfo.KeyProvider)
+	osImageHashRaw := firstNonEmpty(
+		parsed.OSImageHash,
+		parsed.Details.OSImageHash,
+		parsed.AppInfo.OSImageHash,
+		parsed.Details.AppInfo.OSImageHash,
+	)
 
 	valid := parsed.IsValid && quoteVerified && eventLogVerified
 	reason := firstNonEmpty(parsed.Reason, parsed.Error)
@@ -585,6 +643,13 @@ func (c *VerifierClient) Verify(ctx context.Context, req VerifyRequest) (*Verifi
 			return nil, fmt.Errorf("verifier app_info.compose_hash: %w", err)
 		}
 	}
+	osImageHash := ""
+	if osImageHashRaw != "" {
+		osImageHash, err = normalizeSHA256Hex(osImageHashRaw)
+		if err != nil {
+			return nil, fmt.Errorf("verifier os_image_hash: %w", err)
+		}
+	}
 	var keyProvider *KMSPolicy
 	if keyProviderRaw != "" {
 		keyProvider, err = decodeKeyProviderInfo(keyProviderRaw)
@@ -593,12 +658,14 @@ func (c *VerifierClient) Verify(ctx context.Context, req VerifyRequest) (*Verifi
 		}
 	}
 	return &VerifiedQuote{
-		Valid:       valid,
-		Reason:      reason,
-		ComposeHash: composeHash,
-		AppID:       appID,
-		ReportData:  strings.TrimPrefix(strings.ToLower(strings.TrimSpace(reportData)), "0x"),
-		KeyProvider: keyProvider,
+		Valid:               valid,
+		Reason:              reason,
+		ComposeHash:         composeHash,
+		AppID:               appID,
+		ReportData:          strings.TrimPrefix(strings.ToLower(strings.TrimSpace(reportData)), "0x"),
+		KeyProvider:         keyProvider,
+		OSImageHash:         osImageHash,
+		OSImageHashVerified: osImageHashVerified,
 	}, nil
 }
 

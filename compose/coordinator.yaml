@@ -43,7 +43,7 @@ services:
       - CLUSTER_NAME=${CLUSTER_NAME}
       - PEERS_JSON=${PEERS_JSON}
       # SERVICES_JSON is the same content workers see — same shape, same
-      # source-of-truth (local.services in cluster.tf). Coordinators
+      # source-of-truth (local.mesh_services in cluster.tf). Coordinators
       # don't run Envoy sidecars, but coord-0 needs the service list so
       # its config-entry writer can emit per-service service-resolver
       # entries + intentions on cluster bringup. Without this, the

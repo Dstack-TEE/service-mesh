@@ -37,29 +37,28 @@ You need:
 - a Phala Cloud API key,
 - Terraform.
 
-You do not need Docker for the first run. The demo uses prebuilt images
-published by this repository.
-
-The CVMs also need a connection bootstrap endpoint: a small public
-service that helps them find a network path to each other during
-startup. For the easiest demo path, use the public Phala-provided
-bootstrap endpoint for this project. If that endpoint is not available
-in your environment yet, use the self-hosted fallback in
-[`coordinator/`](coordinator/).
-
 ```bash
 git clone https://github.com/Dstack-TEE/service-mesh.git
 cd service-mesh/cluster-example
 cp terraform.tfvars.example terraform.tfvars
-$EDITOR terraform.tfvars
 ```
 
-Fill in:
+For the default demo environment, `terraform.tfvars.example` is already
+filled in. Before applying, make sure the three image values point to
+public container images that Phala Cloud can pull. The example uses the
+release image names; if your deployment sees a registry authorization
+error, replace them with public image tags from your build.
 
-- `gateway_domain`,
-- the connection bootstrap values provided by Phala, or the `external_*`
-  values from the self-hosted fallback,
-- image values only if you are not using the defaults.
+Open `terraform.tfvars` only if your Phala Cloud environment uses a
+different gateway domain or you want to run custom images.
+
+The gateway domain is the suffix used by Phala app URLs, for example:
+
+```text
+https://<app-id>-8080.dstack-pha-prod5.phala.network
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                         gateway_domain
+```
 
 Deploy:
 
@@ -69,9 +68,8 @@ terraform init -upgrade
 terraform apply
 ```
 
-Attestation admission is enabled by default. The cluster does not issue
-service credentials to a worker until its dstack evidence matches the
-Terraform-rendered policy.
+Every node is admitted through attestation before it receives service
+credentials.
 
 ## Verify It Works
 
@@ -80,10 +78,21 @@ laptop:
 
 ```bash
 WEB=$(terraform output -raw webdemo_url)
+echo "$WEB"
 curl "$WEB/hello"
 ```
 
-That checks that the public demo service is reachable.
+The URL has the same shape as other Phala gateway URLs:
+
+```text
+https://<worker-app-id>-8080.dstack-pha-prod5.phala.network
+```
+
+`/hello` should return one worker identity:
+
+```text
+hello from worker-3
+```
 
 Now ask that service to call other demo instances through the private
 cluster network:
@@ -92,8 +101,22 @@ cluster network:
 curl "$WEB/all"
 ```
 
-The response is JSON. You should see replies from multiple workers. That
-proves the important path:
+The response is JSON. The exact worker names can differ, but the shape
+should look like this:
+
+```json
+{
+  "from": "worker-3",
+  "results": {
+    "hello from worker-3": 2,
+    "hello from worker-4": 3,
+    "hello from worker-5": 3
+  },
+  "samples": 8
+}
+```
+
+Seeing more than one worker in `results` proves the important path:
 
 - your request reached the deployed app,
 - one workload called another workload by service name,
@@ -101,6 +124,19 @@ proves the important path:
 - the responding workload had been admitted into the cluster.
 
 ## What App Code Looks Like
+
+The demo deploys a public web service plus a private PostgreSQL service:
+
+```mermaid
+flowchart LR
+  user["Your laptop"] --> gateway["Phala gateway<br/>public HTTPS"]
+  gateway --> web1["worker CVM<br/>webdemo + Postgres"]
+  web1 -->|"http://webdemo:8080"| web2["worker CVM<br/>webdemo + Postgres"]
+  web1 -->|"postgres-master:5432"| web3["worker CVM<br/>PostgreSQL leader"]
+  coord["coordinator CVMs<br/>attestation admission"] -. admits .-> web1
+  coord -. admits .-> web2
+  coord -. admits .-> web3
+```
 
 Inside the cluster, application code calls service names:
 
@@ -115,37 +151,131 @@ the PostgreSQL demo, `postgres-master` follows the current leader and
 `postgres-replica` reaches read replicas. After failover, clients keep
 using the same names.
 
-## Bring Your Own Service
+## Define Your Own Service Mesh
 
-To adapt the template, start from your container:
+To replace the demo with your own application, decide which containers
+run in each worker CVM and which names they should use to call each
+other.
 
-1. Add your container to `compose/worker.yaml`.
-2. Add its image variable in `cluster-example/cluster.tf`.
-3. Declare the service name and port.
-4. Call that service name from other containers.
+For example, this application has a public API and a private worker:
 
-For a stateless service:
-
-```hcl
-{ name = "api", port = 8080, subset = null }
+```mermaid
+flowchart LR
+  user["Your user"] --> gateway["Phala gateway<br/>public HTTPS"]
+  gateway --> api1["worker CVM<br/>api container"]
+  api1 -->|"http://worker:9090"| worker1["worker CVM<br/>worker container"]
+  api1 -->|"http://api:8080"| api2["another worker CVM<br/>api container"]
+  coord["coordinator CVMs<br/>admission policy"] -. admits .-> api1
+  coord -. admits .-> worker1
+  coord -. admits .-> api2
 ```
 
-Other workloads can then call:
+Declare the callable service names in `cluster-example/cluster.tf`:
+
+```hcl
+locals {
+  mesh_services = [
+    { name = "api",    port = 8080 },
+    { name = "worker", port = 9090 },
+  ]
+}
+```
+
+Run those containers in `compose/worker.yaml` beside the existing
+`sidecar` service:
+
+```yaml
+services:
+  api:
+    image: ghcr.io/you/api@sha256:...
+    network_mode: host
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        cat /run/mesh/hosts >> /etc/hosts
+        exec /app/api
+    volumes:
+      - /tmp/dstack-runtime/mesh:/run/mesh:ro
+    depends_on:
+      sidecar:
+        condition: service_healthy
+
+  worker:
+    image: ghcr.io/you/worker@sha256:...
+    network_mode: host
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        cat /run/mesh/hosts >> /etc/hosts
+        exec /app/worker
+    volumes:
+      - /tmp/dstack-runtime/mesh:/run/mesh:ro
+    depends_on:
+      sidecar:
+        condition: service_healthy
+```
+
+After deployment, code in either container can call:
 
 ```text
 http://api:8080
+http://worker:9090
 ```
 
-For a service with roles, declare the names clients should use. The
-PostgreSQL demo uses:
+The sidecar writes `/run/mesh/hosts` from `mesh_services`; app
+containers append it before starting so those names resolve inside each
+container.
+
+For a port listed in `mesh_services`, avoid binding `0.0.0.0:<port>`.
+That also captures the local mesh address for the same port. Bind
+`127.0.0.1:<port>` for mesh traffic; if the same service is public
+through the Phala gateway, also bind the host interface address. The
+demo [`webdemo`](webdemo/main.go) shows that dual-bind pattern.
+
+The PostgreSQL demo uses one advanced option: several public names can
+point at one backend. That is how clients get stable names for the
+current leader and replicas:
 
 ```hcl
-{ name = "postgres-master",  port = 5432, subset = "master"  }
-{ name = "postgres-replica", port = 5432, subset = "replica" }
+locals {
+  mesh_services = [
+    {
+      name             = "postgres-master"
+      port             = 5432
+      backend          = "postgres"
+      role             = "master"
+      workload         = "postgres"
+      parent_service   = var.cluster_name
+      registers_parent = false
+      consul_permissions = {
+        key_prefixes  = ["service/${var.cluster_name}"]
+        session_write = true
+      }
+    },
+    {
+      name             = "postgres-replica"
+      port             = 5432
+      backend          = "postgres"
+      role             = "replica"
+      workload         = "postgres"
+      parent_service   = var.cluster_name
+      registers_parent = false
+      consul_permissions = {
+        key_prefixes  = ["service/${var.cluster_name}"]
+        session_write = true
+      }
+    },
+  ]
+}
 ```
 
-The platform layer turns those declarations into routing, service
-registration, and admission policy.
+You only need the advanced fields when the application owns its own
+service registration or has role-based routing like Patroni. For normal
+services, `name` and `port` are enough.
 
 ## What Is Verified
 
@@ -162,8 +292,7 @@ The policy checks include:
 - the measured compose hash, which identifies the app definition dstack
   measured,
 - the KMS identity, which identifies the key service used by the CVM,
-- the claimed peer name,
-- the OS image hash when `production_profile = true`.
+- the claimed peer name.
 
 If the evidence matches, the worker receives scoped service identity. If
 it does not match, it cannot join the service layer.
@@ -232,10 +361,9 @@ docker build -t service-mesh-mesh-sidecar-check -f mesh-sidecar/Dockerfile .
 
 ## Current Limits
 
-- The smoothest first-run experience depends on a public Phala-provided
-  connection bootstrap endpoint. Until that endpoint is available in
-  your environment, use the self-hosted fallback in
-  [`coordinator/`](coordinator/).
+- The public connection-bootstrap endpoint is intended for demos and
+  development. Production deployments should use a managed or
+  tenant-owned endpoint.
 - The current Terraform provider can add or remove instances without
   disturbing the rest of the cluster, but in-place workload updates are
   still waiting on cloud revision rollout support.

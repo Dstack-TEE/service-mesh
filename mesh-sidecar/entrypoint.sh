@@ -26,7 +26,7 @@
 #                          default-allow intentions — all generated from
 #                          SERVICES_JSON, no per-workload code paths.
 #
-# SERVICES_JSON shape (single source of truth; cluster.tf generates this):
+# SERVICES_JSON shape (derived from local.mesh_services in cluster.tf):
 #
 #   [
 #     {
@@ -41,7 +41,7 @@
 #     ...
 #   ]
 #
-# Services with the same canonical `port` collapse onto one backend
+# Services with the same `backend` collapse onto one producer-side proxy
 # (one sidecar_port, one Envoy). For `registers_parent=false`, the
 # workload owns the *authoritative* parent service registration
 # (tags, health check) under its own `scope` — e.g. Patroni's native
@@ -99,9 +99,11 @@ log "peer VIPs provisioned: $(jq -r '[.[].vip]' <<<"$PEERS_JSON")"
 # Envoy listeners even when they share a producer-side sidecar).
 SERVICES_JSON="${SERVICES_JSON:-[]}"
 if [ "$ROLE" = "worker" ]; then
+  mkdir -p /run/mesh
   for vip in $(jq -r '.[].vip' <<<"$SERVICES_JSON"); do
     ip addr add "127.10.0.${vip}/32" dev lo 2>/dev/null || true
   done
+  jq -r '.[] | "127.10.0.\(.vip)  \(.name)"' <<<"$SERVICES_JSON" > /run/mesh/hosts
   log "service VIPs provisioned: $(jq -r '[.[] | "\(.name)=127.10.0.\(.vip):\(.port)"]' <<<"$SERVICES_JSON")"
 fi
 

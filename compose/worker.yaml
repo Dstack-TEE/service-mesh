@@ -3,9 +3,8 @@
 # A "worker" CVM ends up running exactly three containers:
 #
 #   sidecar   bundled platform plumbing — bootstrap-secrets, mesh-conn,
-#             consul (client), and one Envoy per backend declared in
-#             SERVICES_JSON (services sharing a canonical port share a
-#             backend). Provisions per-peer VIP loopback aliases on
+#             consul (client), and one Envoy per backend derived from
+#             mesh_services in Terraform. Provisions per-peer VIP loopback aliases on
 #             127.50.0.0/24 and per-service VIP aliases on
 #             127.10.0.0/24 at startup, so needs NET_ADMIN.
 #   patroni   the workload — Postgres + Patroni leader/replica. Also
@@ -34,12 +33,10 @@ services:
       # 127.50.0.0/24. mesh-conn binds the runtime allowlist on every
       # other peer's VIP; entrypoint provisions the aliases.
       - PEERS_JSON=${PEERS_JSON}
-      # SERVICES_JSON shape: [{name, port, subset, vip, sidecar_port,
-      # parent, registers_parent}] — single source of truth for every
-      # microservice on the mesh. The sidecar generates Consul
+      # SERVICES_JSON is derived from local.mesh_services in
+      # cluster.tf. The sidecar uses it to generate Consul
       # registrations, Envoy supervise loops, /etc/hosts aliases, and
-      # mesh-conn's allowlist from this one env. Editing local.services
-      # in cluster.tf is the only place adding a service touches.
+      # mesh-conn's allowlist.
       - SERVICES_JSON=${SERVICES_JSON}
       # COORDINATOR_VIPS: comma-separated list of coordinators' peer
       # VIPs. Workers retry-join 127.50.0.<vip>:8301 (serf) for each.
@@ -56,13 +53,14 @@ services:
       - /var/run/dstack.sock:/var/run/dstack.sock:ro
       - /tmp/dstack-runtime/secrets:/run/secrets
       - /tmp/dstack-runtime/instance:/run/instance
+      - /tmp/dstack-runtime/mesh:/run/mesh
       - /tmp/dstack-runtime/consul-tokens:/run/consul-tokens
       - consul-data:/consul/data
     # Healthy = bootstrap-secrets has finished and info.json is in
     # place. patroni/webdemo gate on this so they don't FATAL-restart
     # in a loop while the sidecar is still booting.
     healthcheck:
-      test: ["CMD-SHELL", "test -s /run/instance/info.json"]
+      test: ["CMD-SHELL", "test -s /run/instance/info.json && test -f /run/mesh/hosts"]
       interval: 2s
       timeout: 1s
       retries: 60
@@ -96,6 +94,7 @@ services:
       - PEERS_JSON=${PEERS_JSON}
     volumes:
       - /tmp/dstack-runtime/instance:/run/instance:ro
+      - /tmp/dstack-runtime/mesh:/run/mesh:ro
       - /tmp/dstack-runtime/consul-tokens:/run/consul-tokens:ro
       - /tmp/dstack-runtime/secrets:/run/secrets:ro
       - patroni-pgdata:/var/lib/patroni
@@ -115,12 +114,13 @@ services:
       - |
         set -e
         export PEER_ID=$$(jq -r '.role + "-" + (.ordinal|tostring)' /run/instance/info.json)
-        # Append service-VIP /etc/hosts entries — each container has
-        # its own /etc/hosts (network_mode: host doesn't share it).
-        echo "$$SERVICES_JSON" | jq -r '.[] | "127.10.0.\(.vip)  \(.name)"' >> /etc/hosts
+        # Append service-VIP /etc/hosts entries. Each container has
+        # its own /etc/hosts even with network_mode: host.
+        cat /run/mesh/hosts >> /etc/hosts
         exec webdemo
     volumes:
       - /tmp/dstack-runtime/instance:/run/instance:ro
+      - /tmp/dstack-runtime/mesh:/run/mesh:ro
     depends_on:
       sidecar:
         condition: service_healthy

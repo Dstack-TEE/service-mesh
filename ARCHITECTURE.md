@@ -93,10 +93,10 @@ remote peer over the QUIC link. With the 3-service example
 The runtime allowlist is intentionally minimal — mesh-conn knows
 **peers, not services**. Apps never dial peer VIPs; only Envoy and
 Consul-agent do. Consul uses fixed platform ports; Envoy sidecar ports
-are generated from `local.services`.
+are generated from `local.mesh_services`.
 
 The allowlist is **platform-generated, not Go-const**: per-service
-Connect-sidecar ports come from `local.services` in `cluster.tf`, get
+Connect-sidecar ports come from `local.mesh_services` in `cluster.tf`, get
 collapsed into per-backend `sidecar_port`s, and the platform sidecar
 emits `MESH_CONN_ALLOWLIST` env (JSON `[{port, udp}, …]`) at startup.
 mesh-conn reads it once and binds accordingly. Adding a service is an
@@ -273,8 +273,8 @@ Two non-obvious consequences of doing it this way:
 If you write your own Consul-native workload (Pattern B — Vault,
 Nomad, custom Raft), the same shape applies: register your parent
 once under `CLUSTER_NAME`, write the tag-flipping loop in your
-workload's entrypoint, declare role-aware `service-resolver` subsets
-in `local.services`, and Connect's EDS plumbing handles the rest.
+workload's entrypoint, declare role-aware entries in
+`local.mesh_services`, and Connect's EDS plumbing handles the rest.
 
 ## mesh-conn × QUIC — how they work together
 
@@ -348,7 +348,7 @@ The 16-bit `port` is the **receiver's local port to dial / write
 into**. The receiver validates it against `MESH_CONN_ALLOWLIST`; any
 port absent from that runtime allowlist is rejected. There is no
 per-peer port-list lookup — the platform emits the same allowlist on
-every CVM from `local.services` plus Consul's infrastructure ports.
+every CVM from `local.mesh_services` plus Consul's infrastructure ports.
 
 UDP-over-stream uses an explicit 2-byte big-endian length prefix per
 datagram, since QUIC streams are byte-oriented (like yamux was) and

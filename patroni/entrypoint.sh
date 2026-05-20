@@ -34,7 +34,7 @@ SERVICES_JSON="${SERVICES_JSON:?SERVICES_JSON required}"
 # loopback aliases on lo are shared via network_mode: host but name
 # resolution is per-container). After this, `postgres-master:5432`
 # resolves to the local Envoy upstream listener.
-echo "$SERVICES_JSON" | jq -r '.[] | "127.10.0.\(.vip)  \(.name)"' >> /etc/hosts
+cat /run/mesh/hosts >> /etc/hosts
 
 DATA_DIR=/var/lib/patroni/pgdata
 mkdir -p "$DATA_DIR"

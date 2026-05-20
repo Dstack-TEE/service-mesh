@@ -19,7 +19,7 @@
 // SERVICES_JSON (per-service Connect-sidecar ports) plus the two
 // static Consul-infra ports {8300, 8301}. The substance — which ports
 // cross peer boundaries — is platform state declared one level up in
-// `cluster.tf`'s `local.services`; mesh-conn just reads what the
+// `cluster.tf`'s `local.mesh_services`; mesh-conn just reads what the
 // platform tells it.
 //
 // Today's defaults (3-service example: webdemo + postgres-master/-replica):
@@ -166,7 +166,7 @@ func loadConfig() *Config {
 	// the platform sidecar entrypoint from SERVICES_JSON (per-service
 	// Connect-sidecar ports) plus the static Consul-infra ports
 	// (8300 RPC + 8301 gossip). This is platform plumbing; developers
-	// edit `local.services` in cluster.tf, not this env.
+	// edit `local.mesh_services` in cluster.tf, not this env.
 	if err := json.Unmarshal([]byte(mustEnv("MESH_CONN_ALLOWLIST")), &cfg.Allowlist); err != nil {
 		log.Fatalf("MESH_CONN_ALLOWLIST: %v", err)
 	}

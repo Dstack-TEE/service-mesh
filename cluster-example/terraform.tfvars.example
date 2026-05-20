@@ -1,7 +1,9 @@
 # Copy to terraform.tfvars and fill in.
 #
-# Defaults below point at the GHCR-published, Sigstore-attested images
-# produced by .github/workflows/publish.yml. Pin to a
+# Defaults below point at the GHCR-published, Sigstore-attested image
+# names produced by .github/workflows/publish.yml. The packages must be
+# public before a Phala CVM can pull them; otherwise replace these with
+# public image tags from your build. Pin to a
 # specific commit by replacing `:latest` with `:sha-<full-sha>` (40-char
 # git sha) — preferred for prod since `:latest` floats. Verify a tag
 # came from this repo with:
@@ -16,19 +18,23 @@
 cluster_name           = "demo"
 coordinator_replicas   = 3
 worker_replicas        = 3
+
+# Phala gateway domain. Keep this default when deploying to the default
+# Phala Cloud production gateway. Change it only if your Phala Cloud
+# environment shows a different gateway suffix in app URLs.
 gateway_domain         = "dstack-pha-prod5.phala.network"
 
 mesh_sidecar_image = "ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest"
 webdemo_image      = "ghcr.io/dstack-tee/service-mesh/webdemo:latest"
 patroni_image      = "ghcr.io/dstack-tee/service-mesh/patroni:latest"
 
-# NAT traversal bootstrap settings. The public demo bootstrap service
-# should run signaling + STUN only, with TURN relay disabled. Leave
-# external_turn_secret empty for that path. Set it only when using a
-# self-hosted coordinator that intentionally enables TURN fallback.
-# external_coordinator_host  = "<managed-or-self-hosted-bootstrap-host>"
-# external_signaling_url     = "http://<managed-or-self-hosted-bootstrap-host>:7000"
-# external_turn_secret       = ""
+# Public demo connection-bootstrap endpoint. It is open for first-run
+# testing and does not relay application traffic. Leave
+# external_turn_secret empty unless you are intentionally using a
+# self-hosted relay fallback.
+external_coordinator_host = "155.138.146.255"
+external_signaling_url    = "http://155.138.146.255:7000"
+external_turn_secret      = ""
 
 # Attestation admission is enabled by default. Terraform generates the
 # Consul management token when consul_management_token is empty.
@@ -38,10 +44,3 @@ patroni_image      = "ghcr.io/dstack-tee/service-mesh/patroni:latest"
 # kms                          = "phala"
 # admission_expected_kms_public_key defaults to the public key for the
 # default phala KMS backend. Override it when changing kms.
-# production_profile           = true
-# os_image                     = "dstack-0.5.7"
-# When production_profile is true, Terraform launches the CVMs with
-# os_image and admission requires dstack-verifier to prove the matching
-# SHA-256 os_image_hash from preflight.
-# Use the provider-normalized OS image name, not the full hash-suffixed
-# display slug, to avoid read-back drift during refresh.

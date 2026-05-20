@@ -227,104 +227,109 @@ locals {
 
   # ---------- Service declarations ----------
   #
-  # local.services is the single source of truth for every microservice
-  # on the mesh. Adding a service is one entry here; the platform
-  # sidecar reads SERVICES_JSON at startup and generates everything
-  # downstream (loopback aliases, /etc/hosts, Consul registrations,
-  # Envoy supervise loops, mesh-conn allowlist).
+  # mesh_services is the app-facing service map. For a normal service,
+  # declare the name other workloads should call and the local port the
+  # container listens on. The lower-level fields consumed by the sidecar
+  # are derived below.
   #
-  #   name    Consul service name (also the /etc/hosts alias).
-  #   port    Canonical app port. App binds 127.0.0.1:port; the local
-  #           Envoy upstream listener binds 127.10.0.<vip>:port.
-  #   subset  Optional. Set this when a single backend hosts multiple
-  #           role-aware logical services (the postgres-master/replica
-  #           split is the only case today). See below.
-  #
-  # ## Why `subset` exists
-  #
-  # `subset` is native Consul vocabulary — `service-resolver` config
-  # entries filter a parent service's instances by tag, and each
-  # filter is called a subset. We expose the same field here because
-  # the audience for this template is people who use (or are learning)
-  # Consul Connect, and importing Consul's vocabulary lets them map
-  # 1-to-1 between our config and Consul's docs.
-  #
-  # The reason this matters for HA Postgres specifically: Patroni
-  # uses Consul as its distributed lock store (DCS) and registers
-  # itself with the local Consul agent on startup. As leadership
-  # changes, Patroni rewrites the `master` / `replica` tag on its own
-  # service instance — no re-registration, no destroy/recreate. A
-  # `service-resolver` with `Subsets { master = Filter("...master") }`
-  # then routes consumer traffic by tag, transparent to the app.
-  # That's what makes `postgres-master:5432` always reach whoever is
-  # leader right now, with sub-second failover via Consul's EDS push.
-  #
-  # So `subset` is not decoration — it's the field that turns a
-  # static service name (`postgres-master`) into a live, leader-
-  # aware route. Workloads that don't have a leader concept
-  # (webdemo) leave it null and Consul Connect treats the entry as
-  # a plain service-resolver redirect.
-  #
-  # See README.md "Adapting to your own workload" for the
-  # two-pattern walkthrough (Consul-blind vs Consul-native), and
-  # ARCHITECTURE.md for how tags flow through the EDS data plane on
-  # failover.
-  services_raw = [
-    { name = "webdemo", port = 8080, subset = null },
-    { name = "postgres-master", port = 5432, subset = "master" },
-    { name = "postgres-replica", port = 5432, subset = "replica" },
+  # Optional fields for advanced services:
+  #   backend           group multiple public names onto one local server
+  #   role              route this name to instances with a matching role tag
+  #   workload          admission identity suffix; defaults to backend/name
+  #   parent_service    underlying Consul service; defaults to backend/name
+  #   registers_parent  false when app code owns service registration
+  #   consul_permissions extra Consul ACL rights needed by that workload
+  mesh_service_default_permissions = {
+    key_prefixes       = []
+    session_write      = false
+    agent_read_self    = true
+    node_identity_self = false
+  }
+
+  mesh_services = [
+    {
+      name = "webdemo"
+      port = 8080
+    },
+    {
+      name             = "postgres-master"
+      port             = 5432
+      backend          = "postgres"
+      role             = "master"
+      workload         = "postgres"
+      parent_service   = var.cluster_name
+      registers_parent = false
+      consul_permissions = {
+        key_prefixes  = ["service/${var.cluster_name}"]
+        session_write = true
+      }
+    },
+    {
+      name             = "postgres-replica"
+      port             = 5432
+      backend          = "postgres"
+      role             = "replica"
+      workload         = "postgres"
+      parent_service   = var.cluster_name
+      registers_parent = false
+      consul_permissions = {
+        key_prefixes  = ["service/${var.cluster_name}"]
+        session_write = true
+      }
+    },
   ]
 
-  # Backends = unique canonical ports in declaration order. Each
-  # backend gets ONE producer-side sidecar at sidecar_port=21000+idx.
-  # Logical names sharing a backend (e.g. postgres-master + -replica)
-  # ride the same Envoy public listener; their distinct names live
-  # purely in service-resolver redirects on the Consul side.
-  service_ports = distinct([for s in local.services_raw : s.port])
-
-  port_sidecar = {
-    for idx, p in local.service_ports : tostring(p) => 21000 + idx
-  }
-
-  # Parent service name per backend. If at least one entry at this
-  # port has subset=null, that entry's `name` is the parent (the
-  # platform sidecar registers a Consul service with Connect.SidecarService
-  # inline — pattern A, webdemo case). If every entry has a subset,
-  # the parent is var.cluster_name (pattern B — Patroni-style: the
-  # parent service is auto-registered by the workload itself under
-  # its `scope`, so the platform only registers a standalone
-  # connect-proxy pointing at it).
-  port_parent = {
-    for p in local.service_ports : tostring(p) => try(
-      [for s in local.services_raw : s.name if s.port == p && s.subset == null][0],
-      var.cluster_name,
-    )
-  }
-
-  # Whether the platform registers the parent service itself.
-  # False = the workload (e.g. Patroni) auto-registers its parent.
-  port_registers_parent = {
-    for p in local.service_ports : tostring(p) =>
-    length([for s in local.services_raw : s if s.port == p && s.subset == null]) > 0
-  }
-
-  # Final per-service descriptors. VIP octets allocated 10+ordinal so
-  # subset entries each get their own 127.10.0.<vip>/32 loopback alias
-  # + /etc/hosts entry — that's what makes `postgres-master:5432` and
-  # `postgres-replica:5432` resolve to different consumer-side Envoy
-  # listeners even when they share a producer-side sidecar.
-  services = [
-    for idx, s in local.services_raw : {
+  mesh_services_normalized = [
+    for s in local.mesh_services : {
       name             = s.name
       port             = s.port
-      subset           = s.subset
-      vip              = 10 + idx
-      sidecar_port     = local.port_sidecar[tostring(s.port)]
-      parent           = local.port_parent[tostring(s.port)]
-      registers_parent = local.port_registers_parent[tostring(s.port)]
-      admission_identity = s.port == 5432 ? (
-        "spiffe://${var.cluster_name}/postgres"
-      ) : "spiffe://${var.cluster_name}/${s.name}"
+      role             = try(s.role, null)
+      backend          = try(s.backend, s.name)
+      workload         = try(s.workload, try(s.backend, s.name))
+      parent           = try(s.parent_service, try(s.backend, s.name))
+      registers_parent = try(s.registers_parent, try(s.role, null) == null)
+      consul_permissions = merge(
+        local.mesh_service_default_permissions,
+        try(s.consul_permissions, {}),
+      )
+    }
+  ]
+
+  # Backends are producer-side servers. Most services have one public
+  # name and one backend. Role-aware services such as Patroni expose
+  # several public names, but they still share one local server and one
+  # producer-side proxy.
+  service_backends = distinct([for s in local.mesh_services_normalized : s.backend])
+
+  backend_sidecar = {
+    for idx, b in local.service_backends : b => 21000 + idx
+  }
+
+  backend_parent = {
+    for b in local.service_backends : b =>
+    [for s in local.mesh_services_normalized : s.parent if s.backend == b][0]
+  }
+
+  backend_registers_parent = {
+    for b in local.service_backends : b =>
+    [for s in local.mesh_services_normalized : s.registers_parent if s.backend == b][0]
+  }
+
+  # Final per-service descriptors. Keep the JSON shape stable for the
+  # existing sidecar/runtime code; only the Terraform authoring surface
+  # above changes.
+  services = [
+    for idx, s in local.mesh_services_normalized : {
+      name               = s.name
+      port               = s.port
+      subset             = s.role
+      role               = s.role
+      backend            = s.backend
+      vip                = 10 + idx
+      sidecar_port       = local.backend_sidecar[s.backend]
+      parent             = local.backend_parent[s.backend]
+      registers_parent   = local.backend_registers_parent[s.backend]
+      admission_identity = "spiffe://${var.cluster_name}/${s.workload}"
     }
   ]
 
@@ -382,29 +387,17 @@ locals {
   # starts, so the client agent itself joins only after attestation.
   admission_node_identity = "spiffe://${var.cluster_name}/node"
 
+  mesh_workloads = distinct([for s in local.mesh_services_normalized : s.workload])
+
   admission_service_identities = [
-    {
-      name           = "webdemo"
-      identity       = "spiffe://${var.cluster_name}/webdemo"
-      consul_service = "webdemo"
-      consul_permissions = {
-        key_prefixes       = []
-        session_write      = false
-        agent_read_self    = true
-        node_identity_self = false
-      }
-    },
-    {
-      name           = "postgres"
-      identity       = "spiffe://${var.cluster_name}/postgres"
-      consul_service = var.cluster_name
-      consul_permissions = {
-        key_prefixes       = ["service/${var.cluster_name}"]
-        session_write      = true
-        agent_read_self    = true
-        node_identity_self = false
-      }
-    },
+    for workload in local.mesh_workloads : {
+      name           = workload
+      identity       = "spiffe://${var.cluster_name}/${workload}"
+      consul_service = [for s in local.mesh_services_normalized : s.parent if s.workload == workload][0]
+      consul_permissions = [
+        for s in local.mesh_services_normalized : s.consul_permissions if s.workload == workload
+      ][0]
+    }
   ]
 
   worker_preflight_env = {
@@ -621,17 +614,49 @@ resource "phala_app" "worker" {
   wait_for_ready       = true
   wait_timeout_seconds = 600
 
-  # Plan-time check: every (name, subset) tuple in local.services must
-  # be unique. Catches typos like declaring two `webdemo` entries, or
-  # two `postgres-master` entries with the same subset. Backends
-  # (services sharing a canonical port) intentionally collapse onto
-  # one sidecar_port; that's not flagged.
+  # Plan-time checks for the app-facing mesh_services declarations.
+  # The runtime sidecar expects one port, parent service, and
+  # registration mode per backend, so Terraform catches inconsistent
+  # authoring before any CVM is created.
   lifecycle {
     precondition {
-      condition = length(local.services) == length(distinct([
-        for s in local.services : "${s.name}/${s.subset == null ? "" : s.subset}"
-      ]))
-      error_message = "local.services has duplicate (name, subset) entries — each logical service name (with its subset) must be unique."
+      condition     = length(local.services) == length(distinct([for s in local.services : s.name]))
+      error_message = "local.mesh_services has duplicate service names. Each callable service name must be unique."
+    }
+    precondition {
+      condition = alltrue([
+        for b in local.service_backends :
+        length(distinct([for s in local.mesh_services_normalized : tostring(s.port) if s.backend == b])) == 1
+      ])
+      error_message = "Each mesh backend must use exactly one local port. Split services into different backends when they listen on different ports."
+    }
+    precondition {
+      condition = alltrue([
+        for b in local.service_backends :
+        length(distinct([for s in local.mesh_services_normalized : s.parent if s.backend == b])) == 1
+      ])
+      error_message = "Each mesh backend must map to exactly one parent_service."
+    }
+    precondition {
+      condition = alltrue([
+        for b in local.service_backends :
+        length(distinct([for s in local.mesh_services_normalized : tostring(s.registers_parent) if s.backend == b])) == 1
+      ])
+      error_message = "Each mesh backend must use one registers_parent mode."
+    }
+    precondition {
+      condition = alltrue([
+        for w in local.mesh_workloads :
+        length(distinct([for s in local.mesh_services_normalized : s.parent if s.workload == w])) == 1
+      ])
+      error_message = "Each mesh workload must map to exactly one parent_service because admission issues one Consul token per workload identity."
+    }
+    precondition {
+      condition = alltrue([
+        for w in local.mesh_workloads :
+        length(distinct([for s in local.mesh_services_normalized : jsonencode(s.consul_permissions) if s.workload == w])) == 1
+      ])
+      error_message = "Each mesh workload must use one consul_permissions shape because admission issues one Consul token per workload identity."
     }
   }
 
@@ -681,10 +706,10 @@ output "consul_ui" {
   # Coordinator-0's Consul HTTP API on the canonical 8500. Plain HTTP
   # backend → use the no-`s` gateway form (gateway terminates TLS).
   # See README "dstack gateway URL convention".
-  value = "https://${phala_app.coordinator.app_id}-8500.${var.gateway_domain}/ui"
+  value = "https://${trimprefix(phala_app.coordinator.app_id, "app_")}-8500.${var.gateway_domain}/ui"
 }
 
 output "webdemo_url" {
   description = "Public gateway URL for the worker webdemo service. Use /hello for one worker and /all to fan out through the mesh."
-  value       = "https://${phala_app.worker.app_id}-8080.${var.gateway_domain}"
+  value       = "https://${trimprefix(phala_app.worker.app_id, "app_")}-8080.${var.gateway_domain}"
 }

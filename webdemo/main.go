@@ -1,11 +1,12 @@
 // webdemo — tiny Connect-mesh sample sitting on the peer-VIP / service-VIP
 // fabric.
 //
-// Binds canonical 127.0.0.1:8080 and serves two endpoints:
+// Binds 127.0.0.1:8080 for the local sidecar and non-loopback host
+// addresses for the public gateway, then serves two endpoints:
 //
-//   GET /hello  → "hello from <peer-id>"
-//   GET /all    → fan-out N times to http://webdemo:8080/hello and
-//                 aggregate replies; demonstrates Envoy-LB across peers
+//	GET /hello  → "hello from <peer-id>"
+//	GET /all    → fan-out N times to http://webdemo:8080/hello and
+//	              aggregate replies; demonstrates Envoy-LB across peers
 //
 // Platform plumbing — Consul registration, sidecar provisioning,
 // /etc/hosts entries, service-VIP allocation — happens entirely in
@@ -18,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -50,9 +52,12 @@ func main() {
 		})
 	})
 
-	addr := fmt.Sprintf("127.0.0.1:%d", webdemoPort)
-	log.Printf("webdemo: peer=%s listening on %s", name, addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	addrs, err := listenAddrs(webdemoPort)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("webdemo: peer=%s listening on %s", name, strings.Join(addrs, ", "))
+	log.Fatal(serveAll(addrs))
 }
 
 func fanOut(n int) map[string]int {
@@ -87,4 +92,50 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+func listenAddrs(port int) ([]string, error) {
+	seen := map[string]bool{}
+	addrs := []string{fmt.Sprintf("127.0.0.1:%d", port)}
+	seen[addrs[0]] = true
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, fmt.Errorf("list interfaces: %w", err)
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		ifaceAddrs, err := iface.Addrs()
+		if err != nil {
+			return nil, fmt.Errorf("list addresses for %s: %w", iface.Name, err)
+		}
+		for _, addr := range ifaceAddrs {
+			ip, _, err := net.ParseCIDR(addr.String())
+			if err != nil || ip == nil || ip.To4() == nil {
+				continue
+			}
+			listen := fmt.Sprintf("%s:%d", ip.String(), port)
+			if !seen[listen] {
+				addrs = append(addrs, listen)
+				seen[listen] = true
+			}
+		}
+	}
+	return addrs, nil
+}
+
+func serveAll(addrs []string) error {
+	errCh := make(chan error, len(addrs))
+	for _, addr := range addrs {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("listen on %s: %w", addr, err)
+		}
+		go func(addr string, ln net.Listener) {
+			errCh <- fmt.Errorf("%s: %w", addr, http.Serve(ln, nil))
+		}(addr, ln)
+	}
+	return <-errCh
 }

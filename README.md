@@ -125,17 +125,49 @@ Seeing more than one worker in `results` proves the important path:
 
 ## What App Code Looks Like
 
-The demo deploys a public web service plus a private PostgreSQL service:
+The demo deploys three worker CVMs. Each worker runs `webdemo`,
+Postgres, and Patroni. The web service is public through the Phala
+gateway; Postgres is private and reached by mesh service name.
 
 ```mermaid
 flowchart LR
   user["Your laptop"] --> gateway["Phala gateway<br/>public HTTPS"]
-  gateway --> web1["worker CVM<br/>webdemo + Postgres"]
-  web1 -->|"http://webdemo:8080"| web2["worker CVM<br/>webdemo + Postgres"]
-  web1 -->|"postgres-master:5432"| web3["worker CVM<br/>PostgreSQL leader"]
-  coord["coordinator CVMs<br/>attestation admission"] -. admits .-> web1
-  coord -. admits .-> web2
-  coord -. admits .-> web3
+
+  subgraph coord["Coordinator CVMs"]
+    broker["Attestation admission"]
+    consul["Consul control plane"]
+  end
+
+  subgraph w3["Worker CVM: worker-3"]
+    web3["webdemo"]
+    pat3["Patroni"]
+    pg3["Postgres leader"]
+  end
+
+  subgraph w4["Worker CVM: worker-4"]
+    web4["webdemo"]
+    pat4["Patroni"]
+    pg4["Postgres replica"]
+  end
+
+  subgraph w5["Worker CVM: worker-5"]
+    web5["webdemo"]
+    pat5["Patroni"]
+    pg5["Postgres replica"]
+  end
+
+  gateway --> web3
+  web3 -->|"http://webdemo:8080"| web4
+  web3 -->|"postgres-master:5432"| pg3
+  web3 -->|"postgres-replica:5432"| pg4
+  web3 -->|"postgres-replica:5432"| pg5
+
+  pat3 -. "publishes role" .-> consul
+  pat4 -. "publishes role" .-> consul
+  pat5 -. "publishes role" .-> consul
+  broker -. "admits before credentials" .-> w3
+  broker -. "admits before credentials" .-> w4
+  broker -. "admits before credentials" .-> w5
 ```
 
 Inside the cluster, application code calls service names:

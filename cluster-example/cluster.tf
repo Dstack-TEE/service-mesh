@@ -38,7 +38,7 @@ provider "phala" {}
 # These three secrets MUST be byte-identical across every CVM that
 # joins the cluster (gossip auth, Patroni replication, Patroni superuser).
 # The principled answer is "derive them in the TEE, never let a human
-# touch them" — see attestation-admission.md.
+# touch them" — see ../docs/design/attestation-admission.md.
 #
 # Migration note: in the v0.3 MIG model, all coordinators share ONE
 # `app_id` and each workload group app has its own `app_id`, so within

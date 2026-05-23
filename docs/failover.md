@@ -219,7 +219,7 @@ A few-MB pgdata transferred in ~18 seconds end-to-end. The dataset
 is small enough that handshake/startup overhead dominates, so this
 trace should be read as a recovery-path check rather than a bandwidth
 benchmark. For a current full service-mesh datapoint, see
-`ARCHITECTURE.md`.
+`architecture.md`.
 
 The path itself is the proof point: Patroni correctly detects empty
 pgdata, picks `bootstrap from leader` (not WAL replay), pulls the full

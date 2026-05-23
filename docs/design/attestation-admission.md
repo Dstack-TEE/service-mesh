@@ -1,7 +1,7 @@
 # Design: Attestation Admission Follow-Ups
 
 Phase 1 admission is implemented. The shipped path is documented in
-`../ATTESTATION.md` and enforced by:
+`../attestation.md` and enforced by:
 
 - Terraform preflight-derived `compose_hash` policy.
 - Terraform-declared workload identities and optional `peer_id`.

@@ -164,7 +164,7 @@ What we're waiting on:
     health, snapshot, and leader-transfer scaffolding below while using
     the provider's app-revision fan-out path deliberately.
 
-See ./PROGRESS.md for current status.
+See ../docs/progress.md for current status.
 ==============================================================================
 
 EOF

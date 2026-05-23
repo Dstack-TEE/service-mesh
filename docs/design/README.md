@@ -4,8 +4,9 @@ This directory holds design briefs and handoff notes for open or
 partially landed work on `service-mesh`. Each doc is structured
 so an agent (or a person) can pick it up cold and continue.
 
-The user-facing docs (`README.md`, `ARCHITECTURE.md`, `FAILOVER.md`,
-`PUBLISHING.md`, `ROBUSTNESS.md`) describe what's *shipping today*.
+The user-facing docs (`../../README.md`, `../architecture.md`,
+`../failover.md`, `../publishing.md`, `../robustness.md`)
+describe what's *shipping today*.
 This directory describes what's *next*. They're intentionally
 separated so a user landing on the example doesn't get a roadmap
 in their face.

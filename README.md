@@ -392,7 +392,7 @@ The policy checks include:
 If the evidence matches, the workload receives scoped service identity.
 If it does not match, it cannot join the service layer.
 
-See [`ATTESTATION.md`](ATTESTATION.md) for the exact evidence format and
+See [`docs/attestation.md`](docs/attestation.md) for the exact evidence format and
 verification flow.
 
 ## How It Works
@@ -408,7 +408,7 @@ standard infrastructure:
 - a small peer transport so CVMs can talk privately across the provider
   network.
 
-Read [`ARCHITECTURE.md`](ARCHITECTURE.md) when you want the lower-level
+Read [`docs/architecture.md`](docs/architecture.md) when you want the lower-level
 design.
 
 ## Development
@@ -445,14 +445,16 @@ docker build -t service-mesh-mesh-sidecar-check -f mesh-sidecar/Dockerfile .
 
 ## More Docs
 
-- [`ATTESTATION.md`](ATTESTATION.md): trust flow and evidence checks.
-- [`ARCHITECTURE.md`](ARCHITECTURE.md): lower-level network and service
+- [`docs/attestation.md`](docs/attestation.md): trust flow and evidence checks.
+- [`docs/architecture.md`](docs/architecture.md): lower-level network and service
   design.
-- [`FAILOVER.md`](FAILOVER.md): failover tests and measured recovery
+- [`docs/failover.md`](docs/failover.md): failover tests and measured recovery
   times.
-- [`ROBUSTNESS.md`](ROBUSTNESS.md): failure modes and mitigations.
-- [`PUBLISHING.md`](PUBLISHING.md): image publishing and provenance.
-- [`PROGRESS.md`](PROGRESS.md): current status and remaining work.
+- [`docs/robustness.md`](docs/robustness.md): failure modes and mitigations.
+- [`docs/publishing.md`](docs/publishing.md): image publishing and provenance.
+- [`docs/progress.md`](docs/progress.md): current status and remaining work.
+- [`docs/design/README.md`](docs/design/README.md): design notes and handoff
+  docs for open or historical implementation work.
 
 ## Current Limits
 

@@ -438,7 +438,7 @@ instead of a generic TCP connect check.
   generated in Terraform and broadcast via env; attestation-rooted
   admission will replace this with TEE-derived material). RPC is
   plaintext. Both are confined to inside the overlay, but a full
-  setup would also configure TLS for RPC. See [ROBUSTNESS.md](ROBUSTNESS.md).
+  setup would also configure TLS for RPC. See [robustness.md](robustness.md).
 
 ## What's nice about this shape
 

@@ -208,7 +208,7 @@ CONSUL_ARGS=(
   -hcl='connect { enabled = true }'
   # WORKAROUND: GOSSIP_KEY is generated in Terraform and broadcast
   # to every CVM via env. Attestation-rooted admission will replace
-  # this with TEE-rooted material — see design/attestation-admission.md.
+  # this with TEE-rooted material — see ../docs/design/attestation-admission.md.
   -encrypt="${GOSSIP_KEY:?GOSSIP_KEY required}"
   -log-level=INFO
 )
@@ -592,7 +592,7 @@ HCL
 
     # Default-allow intentions per parent. Tightening this to per-pair
     # allow + default-deny is straightforward but out of scope here;
-    # see design/attestation-admission.md for the longer-term shape.
+    # see ../docs/design/attestation-admission.md for the longer-term shape.
     jq -r '[.[].parent] | unique | .[]' <<<"$MESH_ROUTES_JSON" | while IFS= read -r parent; do
       [ -z "$parent" ] && continue
       CONSUL_HTTP_TOKEN="${CONSUL_MANAGEMENT_TOKEN:-}" consul config write - <<HCL || true

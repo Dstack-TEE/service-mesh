@@ -55,7 +55,7 @@
 // congestion control, and stream-multiplexing — it's exactly what a
 // lossy UDP underlay needs. The previous yamux build died at 3KB-260KB
 // depending on path; current service-mesh bandwidth is documented in
-// ARCHITECTURE.md from real-env benchmarks.
+// docs/architecture.md from real-env benchmarks.
 
 package main
 
@@ -486,7 +486,7 @@ func (m *Mesh) runPeerLink(ctx context.Context, peer Peer) {
 // lexicographically SMALLER id retries after 2 s, the larger-id side
 // after 5 s. The asymmetry exists to break the convergence bug where
 // two peers indefinitely supersede each other's in-flight handshakes
-// on near-simultaneous restart — see ROBUSTNESS.md "ICE auth-race
+// on near-simultaneous restart — see docs/robustness.md "ICE auth-race
 // convergence" for the failure analysis.
 //
 // Mechanism: with a fixed retry both peers republish auth at the

@@ -5,8 +5,9 @@ running on top of all of it.
 
 ## Layer 0 — physical / dstack reality
 
-Six dstack CVMs (3 coordinators + 3 workers), TEE-isolated, sitting
-behind Phala's provider NAT. **They cannot reach each other directly**
+The default example deploys eight dstack CVMs (3 coordinators, 2
+webdemo workload CVMs, and 3 postgres workload CVMs), TEE-isolated,
+sitting behind Phala's provider NAT. **They cannot reach each other directly**
 on any L3 path. Every CVM NATs out to the same public IP, so even a
 "direct" peer-to-peer flow is hairpinned by the provider edge. The
 only thing the CVMs share is outbound internet egress.
@@ -26,7 +27,7 @@ demo service should leave TURN disabled.
                               │
         ┌─────────────────────┼─────────────────────────────────┐
         │                     │                                 │
-   [coord-0]  [coord-1]  [coord-2]   [worker-3]  [worker-4]  [worker-5]
+   [coord-0] [coord-1] [coord-2] [webdemo-0] [webdemo-1] [postgres-0] [postgres-1] [postgres-2]
                             (no L3 connectivity to each other)
 ```
 
@@ -47,17 +48,17 @@ connection).
 
 ```
               ┌── ICE conn / QUIC ──┐
-   coord-0  ◄═│      direct UDP     │═►  worker-3
+   coord-0  ◄═│      direct UDP     │═►  webdemo-0
               └── (NAT hairpin)     ┘
-   coord-0  ◄════════════════════════►  worker-4
-   coord-0  ◄════════════════════════►  worker-5
+   coord-0  ◄════════════════════════►  webdemo-1
+   coord-0  ◄════════════════════════►  postgres-0
    coord-0  ◄════════════════════════►  coord-1
    coord-0  ◄════════════════════════►  coord-2
    ...                                   (full mesh)
 ```
 
-A 6-peer full mesh has 15 ICE connections (6×5/2). Each peer
-maintains five of them.
+An 8-peer full mesh has 28 ICE connections (8×7/2). Each peer
+maintains seven of them.
 
 > Why QUIC and not yamux: yamux assumes a reliable byte-stream
 > underlay. `pion/ice.Conn` is UDP, and the path between dstack CVMs
@@ -71,47 +72,45 @@ maintains five of them.
 This is the trick that makes the overlay invisible to the applications
 above. Two carved-out loopback `/24`s, allocated cluster-wide:
 
-- **Peer VIPs** in `127.50.0.0/24` — one per peer (the peer's
-  ordinal+1 in the example template). Identifies *who* a piece of
-  infrastructure traffic is for.
-- **Service VIPs** in `127.10.0.0/24` — one per Connect upstream a
-  worker consumes (e.g. webdemo, postgres-master, postgres-replica).
+- **Peer VIPs** in `127.50.0.0/24` — one per peer. Identifies *who* a
+  piece of infrastructure traffic is for.
+- **Service VIPs** in `127.10.0.0/24` — one per callable route a
+  workload consumes (e.g. webdemo, postgres-master, postgres-replica).
   Identifies *what service* an app is calling.
 
 mesh-conn binds a small **platform-supplied allowlist** on every
 *other* peer's VIP and forwards each accepted connection to the right
-remote peer over the QUIC link. With the 3-service example
-(webdemo + postgres-master/-replica) the allowlist is:
+remote peer over the QUIC link. In the default backend-plus-database
+demo (`webdemo` + `postgres-master` / `postgres-replica`), the allowlist
+is:
 
 | Port  | Used by                                               | Proto       |
 |-------|-------------------------------------------------------|-------------|
-| 21000 | Envoy Connect public mTLS — webdemo sidecar           | TCP         |
-| 21001 | Envoy Connect public mTLS — postgres sidecar          | TCP         |
+| 21000 | Envoy Connect public mTLS — postgres sidecar          | TCP         |
+| 21001 | Envoy Connect public mTLS — webdemo sidecar           | TCP         |
 | 8300  | Consul server RPC (server-to-server, client-to-server)| TCP         |
 | 8301  | Consul serf-LAN gossip                                | UDP + TCP   |
 
 The runtime allowlist is intentionally minimal — mesh-conn knows
 **peers, not services**. Apps never dial peer VIPs; only Envoy and
 Consul-agent do. Consul uses fixed platform ports; Envoy sidecar ports
-are generated from `local.mesh_services`.
+are generated from `local.workload_groups`.
 
-The allowlist is **platform-generated, not Go-const**: per-service
-Connect-sidecar ports come from `local.mesh_services` in `cluster.tf`, get
-collapsed into per-backend `sidecar_port`s, and the platform sidecar
+The allowlist is **platform-generated, not Go-const**: producer
+Connect-sidecar ports come from `local.workload_groups` in `cluster.tf`,
+get collapsed into per-backend `sidecar_port`s, and the platform sidecar
 emits `MESH_CONN_ALLOWLIST` env (JSON `[{port, udp}, …]`) at startup.
-mesh-conn reads it once and binds accordingly. Adding a service is an
-HCL edit in `cluster.tf`; mesh-conn never has to be rebuilt.
+mesh-conn reads it once and binds accordingly. Adding a backend is an HCL
+edit in `cluster.tf`; mesh-conn never has to be rebuilt.
 
 ```
-                  inside worker-3 CVM (network_mode: host)
+                  inside webdemo-0 CVM (network_mode: host)
    ┌───────────────────────────────────────────────────────────────────┐
    │ local apps + platform processes bind canonical ports on lo:       │
    │                                                                   │
-   │   patroni / pg     ▶  127.0.0.1:5432  (postgres)                  │
-   │                       127.0.0.1:8008  (patroni REST)              │
    │   webdemo          ▶  127.0.0.1:8080                              │
-   │   envoy-webdemo    ▶  127.0.0.1:21000 (sidecar public mTLS)       │
-   │   envoy-postgres   ▶  127.0.0.1:21001 (sidecar public mTLS)       │
+   │   envoy-egress     ▶  127.10.0.* route listeners                  │
+   │   envoy-webdemo    ▶  127.50.0.<self>:21001 (producer mTLS)       │
    │   consul agent     ▶  127.0.0.1:8500  (HTTP)                      │
    │                       127.0.0.1:8502  (gRPC, Envoy xDS)           │
    │                       127.0.0.1:8301  (serf gossip)               │
@@ -120,33 +119,32 @@ HCL edit in `cluster.tf`; mesh-conn never has to be rebuilt.
    │ loopback aliases (provisioned once at sidecar entrypoint):        │
    │                                                                   │
    │   127.50.0.<vip>/32  for every peer — peer VIPs                   │
-   │   127.10.0.<vip>/32  per declared upstream — service VIPs         │
+   │   127.10.0.<vip>/32  per declared route — service VIPs            │
    │                                                                   │
    │ mesh-conn binds the allowlist on OTHER peers' VIPs, e.g. on       │
-   │ worker-3:                                                         │
+   │ webdemo-0:                                                        │
    │                                                                   │
    │   127.50.0.1:8301,8300,21000,21001  ◄── coord-0                   │
    │   127.50.0.2:8301,8300,21000,21001  ◄── coord-1                   │
    │   127.50.0.3:8301,8300,21000,21001  ◄── coord-2                   │
-   │   127.50.0.5:8301,8300,21000,21001  ◄── worker-4                  │
-   │   127.50.0.6:8301,8300,21000,21001  ◄── worker-5                  │
+   │   127.50.0.4:8301,8300,21000,21001  ◄── postgres-0                │
+   │   127.50.0.8:8301,8300,21000,21001  ◄── webdemo-1                 │
    │                                                                   │
-   │ Envoy listens on the service VIPs for declared upstreams:         │
+   │ The egress Envoy listens on the service VIPs for declared routes: │
    │                                                                   │
-   │   127.10.0.10:8080   →  cluster `webdemo`                         │
-   │   127.10.0.20:5432   →  cluster `postgres-master`                 │
-   │   127.10.0.21:5432   →  cluster `postgres-replica`                │
+   │   127.10.0.10:5432   →  cluster `postgres-master`                 │
+   │   127.10.0.11:5432   →  cluster `postgres-replica`                │
+   │   127.10.0.12:8080   →  cluster `webdemo`                         │
    │                                                                   │
    │ /etc/hosts maps service names → service VIPs, so apps just call   │
    │ `postgres-master:5432`.                                           │
    └───────────────────────────────────────────────────────────────────┘
 ```
 
-Every peer has a symmetric layout: own ports bound by apps + Envoy +
-Consul, other peers' VIP+allowlist bound by mesh-conn. Self's VIP is
-also aliased on `lo` (local short-circuit: dialing
-`127.50.0.<self-vip>:21000` routes through the kernel directly to
-the local Envoy, no mesh-conn hop).
+Every workload peer has the same consumer layout: an egress Envoy owns
+all route VIP listeners. Only peers whose group owns a backend also run a
+producer Envoy for that backend. Every peer also has other peers'
+VIP+allowlist bound by mesh-conn.
 
 ## Layer 3 — apps
 
@@ -157,44 +155,44 @@ HashiCorp Consul, stock Envoy, stock Patroni.
 
 ## How a single call traverses all four layers
 
-A Connect-mTLS call from `worker-3`'s webdemo to whichever peer's
-webdemo Envoy load-balances onto:
+A Connect-mTLS call from `webdemo-0`'s app to whichever webdemo backend
+Envoy load-balances onto:
 
 ```
-worker-3 webdemo
+webdemo-0 webdemo
   GET http://webdemo:8080/hello                ── Layer 3, app dialing
-  │   /etc/hosts → 127.10.0.10                    a service name
+  │   /etc/hosts → 127.10.0.12                    a service name
   ▼
-worker-3 envoy-webdemo
-  listener on 127.10.0.10:8080 (cluster `webdemo`)
-  EDS endpoint pick → e.g. 127.50.0.5:21000 (worker-4's webdemo sidecar)
-  opens mTLS to "127.50.0.5:21000"
+webdemo-0 envoy-egress
+  listener on 127.10.0.12:8080 (cluster `webdemo`)
+  EDS endpoint pick → e.g. 127.50.0.8:21001 (webdemo-1's webdemo sidecar)
+  opens mTLS to "127.50.0.8:21001"
   │
   ▼
-worker-3 mesh-conn (TCP listener on 127.50.0.5:21000)
+webdemo-0 mesh-conn (TCP listener on 127.50.0.8:21001)
   reads bytes off the local TCP listener
-  opens a QUIC stream tagged "port=21000"
-  writes through the worker-3↔worker-4 QUIC connection      ── Layer 2 → 1
+  opens a QUIC stream tagged "port=21001"
+  writes through the webdemo-0↔webdemo-1 QUIC connection    ── Layer 2 → 1
   │     ╱
   │    ╱  here Layer 1 (QUIC frames over the ICE conn)
   │   ╱   meets Layer 0 (UDP packets across the public
   │  ╱    internet, NAT-hairpinned via the provider edge)
   │ ╱
   ▼
-worker-4 mesh-conn (QUIC stream accept on the worker-3 ICE conn)
-  reads stream header → "port=21000" (allowlist-validated)
-  dials TCP to 127.0.0.1:21000 (worker-4's webdemo sidecar)
+webdemo-1 mesh-conn (QUIC stream accept on the webdemo-0 ICE conn)
+  reads stream header → "port=21001" (allowlist-validated)
+  dials TCP to 127.50.0.8:21001 (webdemo-1's webdemo sidecar)
   splices stream ↔ TCP conn                                 ── Layer 1 → 2
   │
   ▼
-worker-4 envoy-webdemo
+webdemo-1 envoy-webdemo
   validates origin's mTLS cert against Connect CA
-  checks intention webdemo → webdemo (allow)
+  checks intention egress-webdemo → webdemo (allow)
   forwards to local 127.0.0.1:8080 (LocalServicePort)
   │
   ▼
-worker-4 webdemo
-  serves /hello → "hello from worker-4"                     ── Layer 3
+webdemo-1 webdemo
+  serves /hello → "hello from webdemo-1"                    ── Layer 3
 ```
 
 Reply takes the same path in reverse.
@@ -205,9 +203,10 @@ A Patroni replica following the leader is just another consumer of
 the `postgres-master` Connect upstream — no special case. The
 replica's `primary_conninfo` carries `host=postgres-master port=5432`
 (the same constant string registered as `postgresql.connect_address`
-on every Patroni instance). The local Envoy at `127.10.0.20:5432`
-proxies to the leader's `127.50.0.<leader-vip>:21001`, which lands
-on the leader's postgres-sidecar Envoy and gets forwarded to local
+on every Patroni instance). The local egress Envoy at
+`127.10.0.10:5432` proxies to the leader's
+`127.50.0.<leader-vip>:21000`, which lands on the leader's
+postgres producer Envoy and gets forwarded to local
 `127.0.0.1:5432`. The Connect mesh stays in the data path for
 streaming WAL + `pg_basebackup` — the 2× Envoy hop tax is the cost
 of keeping mesh-conn workload-agnostic.
@@ -223,11 +222,14 @@ Subsets = {
 }
 ```
 
-Patroni auto-registers the parent `postgres` service with the
-current role as a tag (`master` on the leader, `replica` on
-followers). The subset filter strips down EDS endpoints to the right
-peer's sidecar, and the `postgres-master` / `postgres-replica`
-service-resolvers redirect to the right subset of `postgres`.
+The mesh disables Patroni's native service catalog writes with
+`register_service: false` and runs a role-watcher in the Patroni
+container. The role-watcher polls Patroni's local REST API and updates
+the parent `postgres` service with the current role as a tag (`master`
+on the leader, `replica` on followers). The subset filter strips down
+EDS endpoints to the right peer's sidecar, and the `postgres-master` /
+`postgres-replica` service-resolvers redirect to the right subset of
+`postgres`.
 
 ### How the master tag flows through EDS on failover
 
@@ -236,19 +238,19 @@ failover transparent at the consumer side. The chain is short and
 worth tracing:
 
 ```
-T+0    Patroni promotes worker-5 (leadership lock moves in Consul KV).
-T+~1s  worker-5's role-watcher polls Patroni REST, sees role=master,
+T+0    Patroni promotes postgres-2 (leadership lock moves in Consul KV).
+T+~1s  postgres-2's role-watcher polls Patroni REST, sees role=master,
        PUTs the sidecar registration with Tags=["master"].
        (The old leader's role-watcher does the symmetric flip:
        Tags=["replica"].)
-T+~1s  Local Consul agent on worker-5 anti-entropies the new tags up
+T+~1s  Local Consul agent on postgres-2 anti-entropies the new tags up
        to a Consul server.
 T+~1s  Consul server pushes an EDS update to every consumer's Envoy:
        "for cluster postgres-master, the subset master is now
-       {worker-5's sidecar:21001} — the previous member is gone."
+       {postgres-2's sidecar:21000} — the previous member is gone."
 T+~1s  Each consumer Envoy retargets the postgres-master listener at
-       127.10.0.20:5432. Existing in-flight connections to the old
-       endpoint die; the next connection lands on worker-5.
+       127.10.0.10:5432. Existing in-flight connections to the old
+       endpoint die; the next connection lands on postgres-2.
 ```
 
 The whole loop is bounded by Patroni's `loop_wait` (10s default but
@@ -264,17 +266,17 @@ Two non-obvious consequences of doing it this way:
   registered in Consul's catalog as it gains and loses leadership.
   Only the tag changes. A deregister/re-register flow would race
   health checks and risk a "no member" window.
-- **The platform sidecar is unaware of any of this.** It registered
-  the Connect sidecar-proxy once at startup with no tags; the
-  workload (Patroni) owns the dynamic state. Pattern A workloads
-  (webdemo) never touch the role-watcher path — `subset = null`
-  means there's no tag-dependent EDS filter to update.
+- **The platform sidecar only owns static wiring.** It pre-registers a
+  Connect-aware stub once at startup with no role tags; the workload
+  adapter owns the dynamic state. Platform-owned workloads such as
+  `webdemo` never touch the role-watcher path.
 
-If you write your own Consul-native workload (Pattern B — Vault,
-Nomad, custom Raft), the same shape applies: register your parent
-once under `CLUSTER_NAME`, write the tag-flipping loop in your
-workload's entrypoint, declare role-aware entries in
-`local.mesh_services`, and Connect's EDS plumbing handles the rest.
+If you write your own role-aware workload (Vault, Nomad, custom Raft),
+the same shape applies: declare
+`registration = { owner = "workload", parent = ... }`, write the
+adapter that updates that parent with current role tags, declare
+role-aware routes in `local.workload_groups`, and Connect's EDS plumbing
+handles the rest.
 
 ## mesh-conn × QUIC — how they work together
 
@@ -348,7 +350,8 @@ The 16-bit `port` is the **receiver's local port to dial / write
 into**. The receiver validates it against `MESH_CONN_ALLOWLIST`; any
 port absent from that runtime allowlist is rejected. There is no
 per-peer port-list lookup — the platform emits the same allowlist on
-every CVM from `local.mesh_services` plus Consul's infrastructure ports.
+every CVM from `local.workload_groups` plus Consul's infrastructure
+ports.
 
 UDP-over-stream uses an explicit 2-byte big-endian length prefix per
 datagram, since QUIC streams are byte-oriented (like yamux was) and
@@ -377,8 +380,9 @@ format.
 
 ### Real-env service mesh bandwidth
 
-On 2026-05-17 we measured a direct worker-to-worker service-mesh path
-on Phala Cloud `US-WEST-1` with:
+On 2026-05-17, before the workload-group split, we measured a direct
+workload-to-workload service-mesh path on Phala Cloud `US-WEST-1` with
+the old `worker-*` peer names:
 
 - 1 coordinator CVM + 2 worker CVMs, all `tdx.small`.
 - Default ICE candidate gathering, so direct candidates were available.
@@ -388,7 +392,8 @@ on Phala Cloud `US-WEST-1` with:
 - A Consul service-resolver pinned the benchmark service to
   `peer=worker-2`, so the measured route did not use a local backend.
 
-The selected worker-to-worker ICE pair was direct UDP, not TURN relay:
+The selected workload-to-workload ICE pair was direct UDP, not TURN
+relay:
 
 ```text
 worker-1: host 10.0.2.10:55650 <-> srflx 66.220.6.105:50015 (proto=udp)

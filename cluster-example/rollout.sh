@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
 # Workload-aware rolling update driver.
 #
-# STATUS (provider 0.3.0-beta.1): app-level docker_compose / env / image
-# updates on a phala_app in members (MIG) mode are intentionally blocked
-# at plan time by the provider. The per-CVM PATCH endpoints would only
-# mutate the bootstrap slot and leave the other slots on the old
-# revision; until the cloud exposes an app-revision-aware update path
-# that targets every slot atomically, this script's central premise
-# (per-app `terraform apply` to roll all replicas) doesn't work.
+# STATUS: paused. The provider 0.3 beta line has named slots and
+# app-revision fan-out support, but this script has not yet been updated
+# for the workload-group topology or for workload-aware drain ordering.
+# Direct Terraform apply is the supported path for now.
 #
 # The wait_for_quorum_healthy + snapshot helpers below are still useful
-# scaffolding for the eventual slot-aware rollout, so they're kept.
-# The execution section is now a clear error rather than a silent
-# half-update.
+# scaffolding for a future workload-aware rollout, so they're kept. The
+# execution section is a clear error until the rollout behavior is made
+# explicit again.
 #
 # Usage:
 #   ./rollout.sh --plan                # snapshot + plan (no apply)
@@ -27,11 +24,6 @@ set -euo pipefail
 
 # ---------- Config ----------
 
-CLUSTER_NAME="${CLUSTER_NAME:-demo}"
-GATEWAY_DOMAIN="${GATEWAY_DOMAIN:-dstack-pha-prod5.phala.network}"
-# Consul HTTP is on the canonical 8500 on every coordinator since the
-# peer-VIP / service-VIP rewrite (was per-ordinal 18200+ before).
-COORDINATOR_HTTP_PORT="${COORDINATOR_HTTP_PORT:-8500}"
 MIN_READY_SECONDS="${MIN_READY_SECONDS:-30}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
 
@@ -53,19 +45,16 @@ done
 CONSUL_BASE=""
 
 resolve_consul_base() {
-  # `coordinator_app_id` is now a single string (all coordinators share
-  # one app under provider 0.3 MIG model). Any coord agent serves the
-  # HTTP API equally well, and the gateway URL uses the single app_id.
-  local coord_id
-  coord_id=$(terraform output -raw coordinator_app_id 2>/dev/null || echo "")
-  if [[ -z "$coord_id" ]]; then
-    echo "ERROR: terraform output coordinator_app_id missing; run terraform apply at least once" >&2
+  local consul_ui
+  consul_ui=$(terraform output -raw consul_ui 2>/dev/null || echo "")
+  if [[ -z "$consul_ui" ]]; then
+    echo "ERROR: terraform output consul_ui missing; run terraform apply at least once" >&2
     exit 1
   fi
   # `<port>` (no trailing 's') — gateway terminates TLS, backend is
   # plain HTTP. The `<port>s` pass-through form is for backends that
   # speak TLS themselves; Consul's HTTP API does not.
-  CONSUL_BASE="https://${coord_id}-${COORDINATOR_HTTP_PORT}.${GATEWAY_DOMAIN}"
+  CONSUL_BASE="${consul_ui%/ui}"
 }
 
 consul_members_alive() {
@@ -151,15 +140,13 @@ fi
 cat >&2 <<'EOF'
 
 ==============================================================================
-rollout.sh: in-place rolling app updates are not supported under provider
-0.3.0-beta.1. The provider intentionally refuses at plan time to mutate
-app-level fields (docker_compose, env, image, …) on a phala_app in
-members mode, because the per-CVM PATCH endpoints would only update the
-bootstrap slot and leave the other slots on the old revision.
+rollout.sh is paused. The provider 0.3 beta line supports named slots and
+app-revision fan-out, but this script has not yet been updated for the
+current workload-group topology or for workload-aware drain ordering.
 
 What works today:
 
-  * Add a slot:    bump var.worker_replicas (or coordinator_replicas) and
+  * Add a slot:    bump a workload replica variable (or coordinator_replicas) and
                    run `terraform apply` — the provider creates only the
                    new slot; existing slots keep their vm_uuids.
   * Remove a slot: lower the replicas count; only the high-ordinal slot
@@ -167,17 +154,15 @@ What works today:
 
 What does NOT work (yet):
 
-  * Roll a new docker compose / env / image across slots: the provider
-    will plan-fail with "Unsafe update in members mode". Workaround is
-    destroy + recreate (loses disks).
+  * Use this script to roll a new docker compose / env / image across
+    slots: the drain/order/app-targeting behavior has not been reworked
+    for separate workload groups yet.
 
 What we're waiting on:
 
-  * Cloud-side fan-out: the `/apps/{app_id}/revisions/{rev}/redeploy`
-    endpoint (vm_uuids=[…]) does support slot-preserving revision
-    rollouts. Wiring it into the provider — with the kind of pause-
-    between-slots / drain-leader / wait-for-quorum dance this script
-    already implements — is the next step before in-place rolls return.
+  * A workload-aware rollout implementation that reuses the Consul
+    health, snapshot, and leader-transfer scaffolding below while using
+    the provider's app-revision fan-out path deliberately.
 
 See ./PROGRESS.md for current status.
 ==============================================================================

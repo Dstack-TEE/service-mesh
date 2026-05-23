@@ -1,15 +1,16 @@
 #!/bin/sh
 # Render patroni.yml from /run/instance/info.json + env, then exec patroni.
 #
-# Postgres binds canonical 127.0.0.1:5432 on every worker (no per-ordinal
-# arithmetic). Cross-peer access goes through the postgres Connect
-# sidecar at 127.50.0.<peer>:21001 — Patroni doesn't see any of that;
-# its primary_conninfo points at the local service VIP `postgres-master`,
-# which the local Envoy proxies to whoever is the current leader.
+# Postgres binds canonical 127.0.0.1:5432 on every postgres workload CVM
+# (no per-ordinal arithmetic). Cross-peer access goes through the
+# postgres producer sidecar at 127.50.0.<peer>:21001; Patroni doesn't see
+# any of that. Its primary_conninfo points at the local service VIP
+# `postgres-master`, which the local egress Envoy proxies to whoever is
+# the current leader.
 #
 # WORKAROUND: superuser + replication passwords come from
 # Terraform-generated env (PATRONI_SUPERUSER_PW, PATRONI_REPLICATION_PW)
-# broadcast identically to every worker. Attestation-rooted admission
+# broadcast identically to every postgres CVM. Attestation-rooted admission
 # will replace this with TEE-rooted material; see
 # design/attestation-admission.md.
 
@@ -28,20 +29,14 @@ PEER_ID="${ROLE}-${ORD}"
 CLUSTER="${CLUSTER_NAME:?CLUSTER_NAME required}"
 SUPERUSER_PW="${PATRONI_SUPERUSER_PW:?PATRONI_SUPERUSER_PW required}"
 REPL_PW="${PATRONI_REPLICATION_PW:?PATRONI_REPLICATION_PW required}"
-SERVICES_JSON="${SERVICES_JSON:?SERVICES_JSON required}"
-
-# Service-VIP /etc/hosts entries (each container has its own /etc/hosts;
-# loopback aliases on lo are shared via network_mode: host but name
-# resolution is per-container). After this, `postgres-master:5432`
-# resolves to the local Envoy upstream listener.
-cat /run/mesh/hosts >> /etc/hosts
+LOCAL_BACKENDS_JSON="${LOCAL_BACKENDS_JSON:?LOCAL_BACKENDS_JSON required}"
 
 DATA_DIR=/var/lib/patroni/pgdata
 mkdir -p "$DATA_DIR"
 chown -R postgres:postgres "$DATA_DIR" /var/lib/patroni
 chmod 700 "$DATA_DIR"
 
-# Canonical ports — every worker binds the same numbers; cross-peer
+# Canonical ports — every postgres CVM binds the same numbers; cross-peer
 # routing happens at peer-VIP / service-VIP layers above this.
 PG_PORT=5432
 REST_PORT=8008
@@ -149,24 +144,21 @@ EOF
 # carry the full spec — same shape the platform sidecar pre-registers,
 # including the inline `Connect.SidecarService` that links the proxy
 # to this parent. Without that field Consul doesn't return the proxy
-# as a Connect endpoint for the parent and the discovery chain
-# resolves to zero hosts.
+# as a Connect endpoint for the parent and the discovery chain resolves
+# to zero hosts. Route VIP listeners belong to the workload sidecar's
+# egress Envoy, so this producer registration intentionally carries no
+# upstream listeners.
 #
 # The subset filters in the service-resolver
 # (`Service.Tags contains "master"` / "replica") match on the parent's
 # tags, so flipping `$TAG` here is what makes `postgres-master:5432`
 # follow the current leader live.
 ROLE_BACKEND=$(
-  echo "$SERVICES_JSON" \
+  echo "$LOCAL_BACKENDS_JSON" \
     | jq -c --arg parent "$CLUSTER" '
-        map(select(.parent == $parent)) | {
-          sidecar_port: .[0].sidecar_port,
-          port:         .[0].port,
-          upstreams: [.[] | {
-            DestinationName:  .name,
-            LocalBindAddress: ("127.10.0." + (.vip|tostring)),
-            LocalBindPort:    .port
-          }]
+        map(select(.parent == $parent)) | (.[0] // {}) | {
+          sidecar_port: .sidecar_port,
+          port:         .port
         }
       '
 )
@@ -176,7 +168,7 @@ SELF_VIP=$(echo "$PEERS_JSON_FOR_ROLE" | jq -r --arg id "$PEER_ID" '.[] | select
 [ -n "$SELF_VIP" ] || { echo "FATAL: $PEER_ID not in PEERS_JSON" >&2; exit 1; }
 
 if [ "$(echo "$ROLE_BACKEND" | jq -r '.sidecar_port // "null"')" = "null" ]; then
-  echo "[role-watcher] no SERVICES_JSON entry with parent=$CLUSTER — skipping watcher"
+  echo "[role-watcher] no LOCAL_BACKENDS_JSON entry with parent=$CLUSTER — skipping watcher"
 else
   (
     echo "[role-watcher] starting (service_id=${CLUSTER}-${PEER_ID}, rest=127.0.0.1:${REST_PORT})"
@@ -219,7 +211,7 @@ else
               Proxy: {
                 LocalServiceAddress: "127.0.0.1",
                 LocalServicePort:    $backend.port,
-                Upstreams:           $backend.upstreams
+                Upstreams:           []
               }
             }
           }

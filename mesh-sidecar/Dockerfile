@@ -5,8 +5,8 @@
 #                      dstack KMS and writes /run/instance/info.json
 #   mesh-conn          QUIC-on-pion/ICE userspace overlay
 #   consul             agent (server on coordinator CVMs, client on
-#                      worker CVMs)
-#   envoy              Connect mTLS data plane (workers only)
+#                      workload CVMs)
+#   envoy              Connect mTLS data plane (workloads only)
 #
 # Build context is the repository root so this Dockerfile can COPY the
 # sibling Go sources straight in. CI configures that context via

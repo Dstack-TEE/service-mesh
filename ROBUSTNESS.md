@@ -14,7 +14,7 @@ do we do about it?", and lands on a prioritised punch list.
   Layer 3   apps         Consul + Envoy + webdemo + Patroni
                          (HashiCorp / Lyft / Zalando code, well-trodden)
   Layer 2   forwarder    mesh-conn: peer VIPs (127.50.0.0/24),
-                         runtime allowlist from SERVICES_JSON plus
+                         runtime allowlist from MESH_ROUTES_JSON plus
                          Consul infra ports, 3-byte stream header
   Layer 1   transport    pion/ice + QUIC: punched UDP path,
                          stream multiplex, flow control, keepalive
@@ -136,7 +136,7 @@ path. It is **NOT a SPOF for established direct traffic**.
   because pion's `Restart()` doesn't support re-`Dial`; see
   `peerSession` docstring), which republished a fresh auth, which
   re-superseded the peer's next attempt, ad infinitum. Observed on
-  2026-05-13 as worker↔coordinator and worker↔worker pairs flapping
+  2026-05-13 as workload↔coordinator and workload↔workload pairs flapping
   for 7+ minutes per pair, blocking Patroni replica `pg_basebackup`
   (replicas' local Envoys had no endpoint for `postgres-master`).
 
@@ -265,11 +265,11 @@ The mitigations are mostly testing discipline:
 
 ### What's there
 
-- three Consul servers (Raft quorum) on the coordinator CVMs, three
-  clients on the worker CVMs
+- three Consul servers (Raft quorum) on the coordinator CVMs, with
+  clients on the workload CVMs
 - Connect enabled, default CA, generated default-allow intentions per
   parent service
-- Envoy sidecars front-running each webdemo and Patroni
+- workload egress Envoys plus producer Envoys for webdemo and Postgres
 - gossip key set from Terraform-generated cluster material; RPC TLS
   not set
 
@@ -278,9 +278,9 @@ The mitigations are mostly testing discipline:
 | failure                          | impact                                                              | recovery |
 | ---                              | ---                                                                 | ---      |
 | One Consul server CVM dies       | Quorum survives (2 of 3). All cluster ops continue. | dstack recreates the CVM on next `terraform apply`; Consul rejoins, Raft re-replicates. |
-| **Two Consul server CVMs die at once** | No quorum. Workers can still gossip, but: cannot register/deregister services, cannot mint Connect leaf certs, cannot change intentions. Existing Envoy sidecars keep running on cached config; new sidecars block on cert issuance. | bring at least one server back. |
-| Worker's Consul agent dies       | That worker drops out of the catalog. Existing sidecar keeps running on cached config but new connections to it fail. | container `restart: unless-stopped` brings it back; rejoins automatically. |
-| Envoy sidecar dies               | All in-flight mTLS connections through it drop. App's calls to `127.0.0.1:19000` get connection refused. | container restart. ~5 s downtime per peer. |
+| **Two Consul server CVMs die at once** | No quorum. Workload clients can still gossip, but: cannot register/deregister services, cannot mint Connect leaf certs, cannot change intentions. Existing Envoy sidecars keep running on cached config; new sidecars block on cert issuance. | bring at least one server back. |
+| Workload Consul agent dies       | That workload CVM drops out of the catalog. Existing sidecars keep running on cached config but new connections to it fail. | container `restart: unless-stopped` brings it back; rejoins automatically. |
+| Envoy sidecar dies               | In-flight mTLS connections through it drop. App calls to affected service VIPs get connection refused or a reset. | container restart. ~5 s downtime per peer. |
 | Connect CA root expiry           | All sidecar leaf certs go invalid; whole mesh stops. | `consul connect ca set-config` to rotate root, or default 5-year root won't bite us in this experiment. |
 | Connect intention misconfigured (e.g. accidental deny) | Some traffic blocked silently. Sidecar denies are reported as `RBAC: access denied` in Envoy logs. | rotate intention; xDS picks it up in seconds (already demoed). |
 | **RPC TLS not set** | RPC is plaintext on the overlay. Threat is bounded by the QUIC overlay below it (peer ⇄ peer end-to-end encrypted), so on-the-wire taps don't see it; in-CVM containers that bind `127.0.0.1` to the agent's RPC port would. | Derive a small CA from attestation-rooted material and configure Consul TLS using it — design lives in `design/attestation-admission.md`. |
@@ -310,8 +310,8 @@ depth.
 - **Three Consul servers** — landed in commit `17f4642`; the current
   Terraform model deploys three stable coordinator slots, and Consul
   agents on those CVMs run as servers with `bootstrap_expect = 3`.
-  Workers retry-join through every coordinator's serf port via
-  mesh-conn, so the single-coordinator-failure scenario stays
+  Workload Consul clients retry-join through every coordinator's serf
+  port via mesh-conn, so the single-coordinator-failure scenario stays
   operational.
 - **Real registry** — Sigstore-attested GHCR images via
   `.github/workflows/publish.yml`. See
@@ -329,20 +329,23 @@ depth.
 
 ### Boot ordering
 
-Compose's `depends_on` is start-order only, not health-order.
-Currently:
+Compose's `depends_on` is start-order only unless a health condition is
+declared. Current boot-order requirements:
 
 - mesh-conn must reach link-up before Consul tries to gossip with
   peers (otherwise gossip targets won't be reachable, and Consul
   will spam `No known Consul servers` for a few seconds).
-- Consul must be ready to register services before webdemo tries.
+- Consul must be ready before the sidecar can register egress and
+  producer proxies.
 - Sidecar must wait for Consul to have its sidecar definition
   registered (already handled — sidecar's entrypoint loops
   `consul connect envoy -bootstrap` until it succeeds).
 
-The transient errors clear up on retry. Adding `healthcheck:` blocks
-to each service + `depends_on: { service: { condition:
-service_healthy } }` would silence them entirely.
+The workload app containers use
+`depends_on: { sidecar: { condition: service_healthy } }`, so they do
+not start until the sidecar has written `/run/instance/info.json`,
+`/run/mesh/hosts`, and `/run/mesh/exec.sh`. The sidecar still owns the
+Consul and Envoy readiness loops internally.
 
 ### Time drift
 

@@ -17,12 +17,8 @@
 
 cluster_name           = "demo"
 coordinator_replicas   = 3
-worker_replicas        = 3
-
-# Phala gateway domain. Keep this default when deploying to the default
-# Phala Cloud production gateway. Change it only if your Phala Cloud
-# environment shows a different gateway suffix in app URLs.
-gateway_domain         = "dstack-pha-prod5.phala.network"
+webdemo_replicas       = 2
+postgres_replicas      = 3
 
 mesh_sidecar_image = "ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest"
 webdemo_image      = "ghcr.io/dstack-tee/service-mesh/webdemo:latest"

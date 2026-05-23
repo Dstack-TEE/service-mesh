@@ -6,7 +6,7 @@
 #                          (identity only — no per-protocol ports)
 #   2. ip addr add       — provisions peer-VIP loopback aliases for every
 #                          peer in PEERS_JSON, and service-VIP aliases
-#                          for every entry in SERVICES_JSON (workers only)
+#                          for every entry in MESH_ROUTES_JSON (workloads only)
 #   3. mesh-conn         — QUIC-on-pion/ICE overlay; binds the allowlist
 #                          (per-service sidecar ports + {8300, 8301})
 #                          on every OTHER peer's VIP and forwards
@@ -16,44 +16,45 @@
 #   5. admission-broker  — coordinators only when attestation admission
 #                          is enabled. Verifies quotes and mints
 #                          service-identity ACL tokens.
-#   6. envoy × N         — workers only. One Envoy per producer-side
-#                          sidecar (one per unique canonical port in
-#                          SERVICES_JSON). Each Envoy gets a distinct
-#                          --base-id and admin-port.
-#   7. config entries    — coordinator-0 only, after quorum: writes
+#   6. egress envoy      — workloads only. Owns outbound listeners for
+#                          every route in MESH_ROUTES_JSON.
+#   7. producer envoy × N — workloads only. One Envoy per local backend
+#                          in LOCAL_BACKENDS_JSON. Each Envoy gets a
+#                          distinct --base-id and admin-port.
+#   8. config entries    — coordinator-0 only, after quorum: writes
 #                          proxy-defaults, per-parent subset resolvers,
 #                          per-subset redirect resolvers, and per-parent
 #                          default-allow intentions — all generated from
-#                          SERVICES_JSON, no per-workload code paths.
+#                          MESH_ROUTES_JSON, no per-workload code paths.
 #
-# SERVICES_JSON shape (derived from local.mesh_services in cluster.tf):
+# MESH_ROUTES_JSON shape (derived from local.workload_groups in cluster.tf):
 #
 #   [
 #     {
-#       "name":             "webdemo",     # Consul service name + /etc/hosts alias
+#       "name":             "webdemo",     # callable name + /etc/hosts alias
+#       "owner":            "webdemo",     # workload group that owns backend
 #       "port":             8080,          # canonical app port (127.0.0.1:port)
 #       "subset":           null,          # optional subset filter
 #       "vip":              10,            # service-VIP last octet (127.10.0.vip)
 #       "sidecar_port":     21000,         # Envoy public mTLS port (shared per backend)
 #       "parent":           "webdemo",     # parent Consul service name
-#       "registers_parent": true           # platform registers parent service inline
+#       "registration_owner": "platform",  # platform or workload
+#       "registers_parent": true           # derived compatibility flag
 #     },
 #     ...
 #   ]
 #
-# Services with the same `backend` collapse onto one producer-side proxy
-# (one sidecar_port, one Envoy). For `registers_parent=false`, the
-# workload owns the *authoritative* parent service registration
-# (tags, health check) under its own `scope` — e.g. Patroni's native
-# Consul integration registers `${scope}/${peer}` with role tags and a
-# REST-API health check. To avoid the chicken-and-egg where the
-# workload can't run (no consumer-side Envoy listener yet) before it
-# has registered (Patroni only registers after pg_basebackup, which
-# needs the listener), the platform pre-registers a *stub* parent
-# service at the same service_id so Consul's proxycfg can populate
-# the connect-proxy's state immediately. The workload's later PUT
-# overwrites the stub in place (same service_id ⇒ idempotent), adding
-# its check and role tags.
+# LOCAL_BACKENDS_JSON contains only producer backends hosted by this
+# workload group. Services with the same `backend` collapse onto one
+# producer-side proxy (one sidecar_port, one Envoy). For
+# `registers_parent=false`, the workload owns the authoritative parent
+# service registration metadata (tags, health check). To avoid the
+# chicken-and-egg where the workload can't run before the producer
+# sidecar exists, the platform pre-registers a Connect-aware stub under
+# the same service_id. The workload adapter later overwrites that stub
+# in place with dynamic metadata. Patroni does this with
+# register_service:false plus the role-watcher loop in
+# patroni/entrypoint.sh.
 #
 # Supervision policy: any one inner process dying takes the whole
 # container down. Compose `restart: on-failure` brings it back in
@@ -65,7 +66,14 @@ exec 2>&1
 prefix() { sed -u "s/^/[$1] /" || cat; }
 log()    { echo "[init] $*"; }
 
-ROLE="${ROLE:?ROLE must be set (coordinator|worker)}"
+ROLE="${ROLE:?ROLE must be set (coordinator or workload group)}"
+if [ "$ROLE" = "coordinator" ]; then
+  IS_COORDINATOR=1
+  IS_WORKLOAD=0
+else
+  IS_COORDINATOR=0
+  IS_WORKLOAD=1
+fi
 log "starting consolidated sidecar, role=$ROLE"
 
 # ---- 1. bootstrap-secrets (one-shot, must complete) ----
@@ -93,18 +101,30 @@ for vip in $(jq -r '.[].vip' <<<"$PEERS_JSON"); do
 done
 log "peer VIPs provisioned: $(jq -r '[.[].vip]' <<<"$PEERS_JSON")"
 
-# Service VIPs (workers only): one 127.10.0.<vip>/32 alias per logical
-# service entry, including subset entries (postgres-master + -replica
-# each get their own VIP, so they resolve to distinct consumer-side
-# Envoy listeners even when they share a producer-side sidecar).
-SERVICES_JSON="${SERVICES_JSON:-[]}"
-if [ "$ROLE" = "worker" ]; then
+# Service VIPs (workloads only): one 127.10.0.<vip>/32 alias per route,
+# including subset routes (postgres-master + -replica each get their own
+# VIP, so they resolve to distinct egress Envoy listeners even when they
+# share a producer-side sidecar). The exec helper is mounted read-only
+# into app containers so they can inherit the sidecar's name-resolution
+# setup without embedding shell plumbing in every service command.
+MESH_ROUTES_JSON="${MESH_ROUTES_JSON:?MESH_ROUTES_JSON required}"
+if [ "$IS_WORKLOAD" = "1" ]; then
+  LOCAL_BACKENDS_JSON="${LOCAL_BACKENDS_JSON:?LOCAL_BACKENDS_JSON required for workload roles}"
   mkdir -p /run/mesh
-  for vip in $(jq -r '.[].vip' <<<"$SERVICES_JSON"); do
+  for vip in $(jq -r '.[].vip' <<<"$MESH_ROUTES_JSON"); do
     ip addr add "127.10.0.${vip}/32" dev lo 2>/dev/null || true
   done
-  jq -r '.[] | "127.10.0.\(.vip)  \(.name)"' <<<"$SERVICES_JSON" > /run/mesh/hosts
-  log "service VIPs provisioned: $(jq -r '[.[] | "\(.name)=127.10.0.\(.vip):\(.port)"]' <<<"$SERVICES_JSON")"
+  jq -r '.[] | "127.10.0.\(.vip)  \(.name)"' <<<"$MESH_ROUTES_JSON" > /run/mesh/hosts
+  cat > /run/mesh/exec.sh <<'EOF'
+#!/bin/sh
+set -e
+cat /run/mesh/hosts >> /etc/hosts
+exec "$@"
+EOF
+  chmod 0555 /run/mesh/exec.sh
+  log "service VIPs provisioned: $(jq -r '[.[] | "\(.name)=127.10.0.\(.vip):\(.port)"]' <<<"$MESH_ROUTES_JSON")"
+else
+  LOCAL_BACKENDS_JSON="[]"
 fi
 
 # ---- 3. mesh-conn allowlist + start ----
@@ -118,7 +138,7 @@ MESH_CONN_ALLOWLIST=$(
     ( [ .[] | .sidecar_port ] | unique | map({port: ., udp: false}) )
     +
     [ {port: 8300, udp: false}, {port: 8301, udp: true}, {port: 8787, udp: false} ]
-  ' <<<"$SERVICES_JSON"
+  ' <<<"$MESH_ROUTES_JSON"
 )
 export MESH_CONN_ALLOWLIST
 log "mesh-conn allowlist: $MESH_CONN_ALLOWLIST"
@@ -135,7 +155,7 @@ MESH=$!
 COORDINATOR_VIPS="${COORDINATOR_VIPS:?COORDINATOR_VIPS required (comma-separated)}"
 RETRYJOIN=()
 for cv in $(echo "$COORDINATOR_VIPS" | tr ',' ' '); do
-  if [ "$ROLE" = "coordinator" ] && [ "$cv" = "$SELF_VIP" ]; then
+  if [ "$IS_COORDINATOR" = "1" ] && [ "$cv" = "$SELF_VIP" ]; then
     continue
   fi
   RETRYJOIN+=("-retry-join=127.50.0.${cv}:8301")
@@ -147,7 +167,7 @@ admission_broker_urls() {
 
 CONSUL_AGENT_TOKEN=""
 ADMISSION_BROKER_URLS=""
-if [ "$ROLE" = "worker" ] && [ "${ADMISSION_BROKER_ENABLE:-}" = "1" ]; then
+if [ "$IS_WORKLOAD" = "1" ] && [ "${ADMISSION_BROKER_ENABLE:-}" = "1" ]; then
   ADMISSION_BROKER_URLS=$(admission_broker_urls)
   NODE_TOKEN_FILE="/tmp/consul-agent-token"
   log "requesting attested Consul agent token (${CLUSTER_NAME}/node)"
@@ -193,7 +213,7 @@ CONSUL_ARGS=(
   -log-level=INFO
 )
 if [ "${ADMISSION_BROKER_ENABLE:-}" = "1" ]; then
-  if [ "$ROLE" = "coordinator" ]; then
+  if [ "$IS_COORDINATOR" = "1" ]; then
     : "${CONSUL_MANAGEMENT_TOKEN:?CONSUL_MANAGEMENT_TOKEN required on coordinators when admission is enabled}"
     CONSUL_ARGS+=(
       -hcl="acl { enabled = true default_policy = \"deny\" enable_token_persistence = true tokens { initial_management = \"${CONSUL_MANAGEMENT_TOKEN}\" agent = \"${CONSUL_MANAGEMENT_TOKEN}\" } }"
@@ -205,7 +225,7 @@ if [ "${ADMISSION_BROKER_ENABLE:-}" = "1" ]; then
     )
   fi
 fi
-if [ "$ROLE" = "coordinator" ]; then
+if [ "$IS_COORDINATOR" = "1" ]; then
   CONSUL_ARGS+=(
     -server
     -bootstrap-expect="${BOOTSTRAP_EXPECT}"
@@ -222,7 +242,7 @@ export CONSUL_HTTP_ADDR="$CONSUL_HTTP"
 
 # ---- 5. coordinators: optional admission broker ----
 ADMISSION_BROKER_PID=""
-if [ "$ROLE" = "coordinator" ] && [ "${ADMISSION_BROKER_ENABLE:-}" = "1" ]; then
+if [ "$IS_COORDINATOR" = "1" ] && [ "${ADMISSION_BROKER_ENABLE:-}" = "1" ]; then
   log "starting admission-broker"
   /usr/local/bin/admission-broker -listen "127.50.0.${SELF_VIP}:8787" 2>&1 | prefix admission-broker &
   ADMISSION_BROKER_PID=$!
@@ -244,59 +264,124 @@ wait_consul_ready() {
   done
 }
 
-# ---- 6. workers: register one Consul service+sidecar per backend, launch Envoys ----
+# ---- 6. workloads: egress proxy + local producer sidecars ----
 ENVOYS=()
-if [ "$ROLE" = "worker" ]; then
+if [ "$IS_WORKLOAD" = "1" ]; then
   log "waiting for local consul agent..."
   wait_consul_ready
+  mkdir -p /run/consul-tokens
 
-  # Iterate unique backends — one per distinct sidecar_port. For each
-  # backend we render one Consul registration JSON and one Envoy
-  # supervise loop. The two patterns are folded inline because they
-  # only diverge in how Consul resolves the parent service:
-  #
-  #   pattern A (registers_parent=true):  inline SidecarService on
-  #     the parent service (webdemo-style). The PUT below registers
-  #     BOTH the parent service AND its sidecar in one shot.
-  #
-  #   pattern B (registers_parent=false): standalone connect-proxy
-  #     registration — the parent service is auto-registered by the
-  #     workload itself under its `scope`; the platform just stands up
-  #     the Envoy proxy that fronts it.
-  BACKENDS=$(jq -c '
-    group_by(.sidecar_port) | map({
-      sidecar_port:     .[0].sidecar_port,
-      port:             .[0].port,
-      parent:           .[0].parent,
-      registers_parent: .[0].registers_parent,
-      # Upstreams = all logical services sharing this backend. Each
-      # one gets its own consumer-side Envoy listener on its VIP.
-      # Distinct VIPs across backends mean every Envoy can bind its
-      # upstream listeners without colliding with other Envoys.
-      upstreams: [.[] | {
-        DestinationName:  .name,
-        LocalBindAddress: ("127.10.0." + (.vip|tostring)),
-        LocalBindPort:    .port
-      }],
-      admission_identity: .[0].admission_identity
-    })
-  ' <<<"$SERVICES_JSON")
+  # The egress proxy is the consumer-side routing layer. It owns every
+  # route VIP listener, even for backends this CVM does not host. Producer
+  # Envoys below only expose local backend sidecars on peer VIPs.
+  EGRESS_SERVICE="egress-${ROLE}"
+  EGRESS_ID="${EGRESS_SERVICE}-${PEER_ID}"
+  EGRESS_PROXY_ID="${EGRESS_ID}-sidecar"
+  EGRESS_SIDECAR_PORT=21999
+  EGRESS_SPEC_FILE="/tmp/egress-${PEER_ID}.json"
+  EGRESS_BOOT="/tmp/envoy-egress.json"
+  EGRESS_TOKEN_FILE="/tmp/consul-token-egress"
+  EGRESS_CONSUL_TOKEN=""
+  EGRESS_UPSTREAMS=$(jq -c '[.[] | {
+    DestinationName:  .name,
+    LocalBindAddress: ("127.10.0." + (.vip|tostring)),
+    LocalBindPort:    .port
+  }]' <<<"$MESH_ROUTES_JSON")
 
+  if [ "${ADMISSION_BROKER_ENABLE:-}" = "1" ]; then
+    log "requesting admission token for ${EGRESS_SERVICE} (spiffe://${CLUSTER_NAME}/egress)"
+    /usr/local/bin/admission-client \
+      -identity "spiffe://${CLUSTER_NAME}/egress" \
+      -broker-urls "$ADMISSION_BROKER_URLS" \
+      -token-file "$EGRESS_TOKEN_FILE" \
+      -cluster "$CLUSTER_NAME" \
+      -peer-id "$PEER_ID" \
+      -timeout 15m 2>&1 | prefix "admission-client-egress"
+    EGRESS_CONSUL_TOKEN=$(tr -d '\r\n' < "$EGRESS_TOKEN_FILE")
+    [ -n "$EGRESS_CONSUL_TOKEN" ] || { log "admission token for ${EGRESS_SERVICE} is empty"; exit 1; }
+  fi
+
+  EGRESS_CURL_TOKEN_ARGS=()
+  [ -n "$EGRESS_CONSUL_TOKEN" ] && EGRESS_CURL_TOKEN_ARGS=(-H "X-Consul-Token: ${EGRESS_CONSUL_TOKEN}")
+
+  jq -n \
+    --arg name "$EGRESS_PROXY_ID" \
+    --arg id "$EGRESS_PROXY_ID" \
+    --arg destination_name "$EGRESS_SERVICE" \
+    --arg destination_id "$EGRESS_ID" \
+    --arg vip "$SELF_VIP" \
+    --argjson port "$EGRESS_SIDECAR_PORT" \
+    --argjson upstreams "$EGRESS_UPSTREAMS" '{
+      Kind: "connect-proxy",
+      Name: $name,
+      ID: $id,
+      Address: ("127.50.0." + $vip),
+      Port: $port,
+      Proxy: {
+        DestinationServiceName: $destination_name,
+        DestinationServiceID: $destination_id,
+        LocalServiceAddress: "127.0.0.1",
+        LocalServicePort: 65535,
+        Upstreams: $upstreams
+      }
+    }' > "$EGRESS_SPEC_FILE"
+
+  log "registering egress proxy ${EGRESS_PROXY_ID} (service=${EGRESS_SERVICE}, base-id=1)"
+  until curl -fsS "${EGRESS_CURL_TOKEN_ARGS[@]}" -X PUT --data-binary @"$EGRESS_SPEC_FILE" \
+           http://127.0.0.1:8500/v1/agent/service/register; do
+    log "egress proxy register failed; retrying"
+    sleep 2
+  done
+
+  log "waiting for connect CA to be ready (egress=${EGRESS_SERVICE})..."
+  until curl -fsS "${EGRESS_CURL_TOKEN_ARGS[@]}" "http://127.0.0.1:8500/v1/agent/connect/ca/leaf/${EGRESS_SERVICE}" >/dev/null 2>&1; do
+    sleep 2
+  done
+
+  (
+    set +eo pipefail
+    while true; do
+      if CONSUL_HTTP_TOKEN="${EGRESS_CONSUL_TOKEN:-}" consul connect envoy \
+            -sidecar-for="$EGRESS_ID" \
+            -admin-bind="127.0.0.1:19000" \
+            -bootstrap \
+            > "$EGRESS_BOOT" 2>/dev/null; then
+        envoy -c "$EGRESS_BOOT" -l info --base-id 1 2>&1
+      else
+        echo "[envoy-egress] waiting for sidecar registration / leaf cert..."
+      fi
+      sleep 2
+    done
+  ) 2>&1 | prefix "envoy-egress" &
+  ENVOYS+=("$!")
+
+  # Iterate local producer backends — one per distinct sidecar_port. For
+  # each backend we render one Consul registration JSON and one Envoy
+  # supervise loop. The two patterns are folded inline because they only
+  # diverge in ownership of runtime service metadata:
+  #
+  #   pattern A (registration_owner=platform): the sidecar owns the
+  #     parent registration, tags, health check, and inline
+  #     SidecarService. Nothing else should mutate the service entry.
+  #
+  #   pattern B (registration_owner=workload): the sidecar creates the
+  #     same Connect-aware stub so Envoy can start. The workload adapter
+  #     overwrites the same service_id with current tags/checks later.
   BACKEND_IDX=0
   while IFS= read -r BACKEND; do
     [ -z "$BACKEND" ] && continue
 
+    BACKEND_NAME=$(jq -r '.backend' <<<"$BACKEND")
     PARENT=$(jq -r '.parent' <<<"$BACKEND")
     SIDECAR_PORT=$(jq -r '.sidecar_port' <<<"$BACKEND")
     LOCAL_PORT=$(jq -r '.port' <<<"$BACKEND")
     REGISTERS_PARENT=$(jq -r '.registers_parent' <<<"$BACKEND")
-    UPSTREAMS=$(jq -c '.upstreams' <<<"$BACKEND")
     ADMISSION_IDENTITY=$(jq -r '.admission_identity // empty' <<<"$BACKEND")
-    BASE_ID=$((BACKEND_IDX + 1))
-    ADMIN_PORT=$((19000 + BACKEND_IDX))
-    SPEC_FILE="/tmp/sidecar-${PARENT}.json"
-    ENVOY_BOOT="/tmp/envoy-${PARENT}.json"
-    TOKEN_FILE="/tmp/consul-token-${PARENT}"
+    BASE_ID=$((BACKEND_IDX + 2))
+    ADMIN_PORT=$((19001 + BACKEND_IDX))
+    SPEC_FILE="/tmp/sidecar-${BACKEND_NAME}.json"
+    ENVOY_BOOT="/tmp/envoy-${BACKEND_NAME}.json"
+    TOKEN_FILE="/tmp/consul-token-${BACKEND_NAME}"
     BACKEND_CONSUL_TOKEN=""
 
     if [ "${ADMISSION_BROKER_ENABLE:-}" = "1" ]; then
@@ -304,16 +389,16 @@ if [ "$ROLE" = "worker" ]; then
       if [ "$PARENT" = "$CLUSTER_NAME" ]; then
         TOKEN_FILE="/run/consul-tokens/consul-token-${PARENT}"
       fi
-      log "requesting admission token for ${PARENT} (${ADMISSION_IDENTITY})"
+      log "requesting admission token for ${BACKEND_NAME} (${ADMISSION_IDENTITY})"
       /usr/local/bin/admission-client \
         -identity "$ADMISSION_IDENTITY" \
         -broker-urls "$ADMISSION_BROKER_URLS" \
         -token-file "$TOKEN_FILE" \
         -cluster "$CLUSTER_NAME" \
         -peer-id "$PEER_ID" \
-        -timeout 15m 2>&1 | prefix "admission-client-${PARENT}"
+        -timeout 15m 2>&1 | prefix "admission-client-${BACKEND_NAME}"
       BACKEND_CONSUL_TOKEN=$(tr -d '\r\n' < "$TOKEN_FILE")
-      [ -n "$BACKEND_CONSUL_TOKEN" ] || { log "admission token for ${PARENT} is empty"; exit 1; }
+      [ -n "$BACKEND_CONSUL_TOKEN" ] || { log "admission token for ${BACKEND_NAME} is empty"; exit 1; }
     fi
 
     # Both patterns use a single registration with inline SidecarService:
@@ -368,8 +453,7 @@ if [ "$ROLE" = "worker" ]; then
       --argjson port "$LOCAL_PORT" \
       --arg vip "$SELF_VIP" \
       --argjson sport "$SIDECAR_PORT" \
-      --argjson tags "$TAGS_JSON" \
-      --argjson upstreams "$UPSTREAMS" '{
+      --argjson tags "$TAGS_JSON" '{
         Name: $name,
         ID: $id,
         Address: "127.0.0.1",
@@ -388,7 +472,7 @@ if [ "$ROLE" = "worker" ]; then
             Proxy: {
               LocalServiceAddress: "127.0.0.1",
               LocalServicePort: $port,
-              Upstreams: $upstreams
+              Upstreams: []
             }
           }
         }
@@ -396,17 +480,17 @@ if [ "$ROLE" = "worker" ]; then
     ENVOY_ARGS=(-sidecar-for="$PARENT_ID")
 
     # Re-register on every boot via the agent HTTP API (PUT-idempotent).
-    log "registering ${PARENT} (id=${PARENT_ID}) + sidecar (port=${SIDECAR_PORT}, base-id=${BASE_ID})"
+    log "registering ${BACKEND_NAME} (parent=${PARENT}, id=${PARENT_ID}) + sidecar (port=${SIDECAR_PORT}, base-id=${BASE_ID})"
     until curl -fsS "${CURL_TOKEN_ARGS[@]}" -X PUT --data-binary @"$SPEC_FILE" \
              http://127.0.0.1:8500/v1/agent/service/register; do
-      log "${PARENT} register failed; retrying"
+      log "${BACKEND_NAME} register failed; retrying"
       sleep 2
     done
 
     # Wait for Connect CA to be able to mint leaf certs — done once
     # per backend, but the operation is idempotent so the extra polls
     # on subsequent backends are cheap.
-    log "waiting for connect CA to be ready (backend=${PARENT})..."
+    log "waiting for connect CA to be ready (backend=${BACKEND_NAME}, parent=${PARENT})..."
     until curl -fsS "${CURL_TOKEN_ARGS[@]}" "http://127.0.0.1:8500/v1/agent/connect/ca/leaf/${PARENT}" >/dev/null 2>&1; do
       sleep 2
     done
@@ -433,21 +517,21 @@ if [ "$ROLE" = "worker" ]; then
               > "$ENVOY_BOOT" 2>/dev/null; then
           envoy -c "$ENVOY_BOOT" -l info --base-id "$BASE_ID" 2>&1
         else
-          echo "[envoy-${PARENT}] waiting for sidecar registration / leaf cert..."
+          echo "[envoy-${BACKEND_NAME}] waiting for sidecar registration / leaf cert..."
         fi
         sleep 2
       done
-    ) 2>&1 | prefix "envoy-${PARENT}" &
+    ) 2>&1 | prefix "envoy-${BACKEND_NAME}" &
     ENVOYS+=("$!")
 
     BACKEND_IDX=$((BACKEND_IDX + 1))
-  done < <(jq -c '.[]' <<<"$BACKENDS")
+  done < <(jq -c '.[]' <<<"$LOCAL_BACKENDS_JSON")
 fi
 
 # ---- 7. coordinator-0: write Connect config entries (idempotent) ----
 # Done from coord-0 only because config entries are cluster-wide; any
 # coord agent could do it. consul config write is idempotent (PUT-style).
-if [ "$ROLE" = "coordinator" ] && [ "$ORDINAL" = "0" ]; then
+if [ "$IS_COORDINATOR" = "1" ] && [ "$ORDINAL" = "0" ]; then
   (
     log "config-entry writer: waiting for consul"
     wait_consul_ready
@@ -477,7 +561,7 @@ HCL
         })
       | map(select(.subsets | length > 0))
       | .[]
-    ' <<<"$SERVICES_JSON" | while IFS= read -r row; do
+    ' <<<"$MESH_ROUTES_JSON" | while IFS= read -r row; do
       [ -z "$row" ] && continue
       parent=$(jq -r '.parent' <<<"$row")
       subsets_hcl=$(jq -r '.subsets | map("  " + . + " = { Filter = \"Service.Tags contains \\\"" + . + "\\\"\" }") | join("\n")' <<<"$row")
@@ -494,7 +578,7 @@ HCL
     # gets a service-resolver that redirects to its parent + subset.
     # That's what makes `postgres-master:5432` resolve to the master
     # subset of the parent service.
-    jq -c '.[] | select(.subset != null)' <<<"$SERVICES_JSON" | while IFS= read -r row; do
+    jq -c '.[] | select(.subset != null)' <<<"$MESH_ROUTES_JSON" | while IFS= read -r row; do
       [ -z "$row" ] && continue
       name=$(jq -r '.name' <<<"$row")
       parent=$(jq -r '.parent' <<<"$row")
@@ -509,7 +593,7 @@ HCL
     # Default-allow intentions per parent. Tightening this to per-pair
     # allow + default-deny is straightforward but out of scope here;
     # see design/attestation-admission.md for the longer-term shape.
-    jq -r '[.[].parent] | unique | .[]' <<<"$SERVICES_JSON" | while IFS= read -r parent; do
+    jq -r '[.[].parent] | unique | .[]' <<<"$MESH_ROUTES_JSON" | while IFS= read -r parent; do
       [ -z "$parent" ] && continue
       CONSUL_HTTP_TOKEN="${CONSUL_MANAGEMENT_TOKEN:-}" consul config write - <<HCL || true
 Kind = "service-intentions"

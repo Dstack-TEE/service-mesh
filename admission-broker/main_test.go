@@ -440,7 +440,7 @@ func TestAttestCarriesConsulPermissionsFromPolicy(t *testing.T) {
 			"workload_id":"demo/worker/0/postgres",
 			"identity":"spiffe://demo/postgres",
 			"consul_service":"demo",
-			"consul_permissions":{"key_prefixes":["/service/demo/"],"session_write":true,"agent_read_self":true},
+			"consul_permissions":{"service_names":["egress-demo-worker-1-sidecar"],"key_prefixes":["/service/demo/"],"session_write":true,"agent_read_self":true},
 			"allowed_compose_hashes":["`+testHash+`"]
 		}]}`),
 		nonces:      NewNonceStore(time.Minute),
@@ -486,6 +486,9 @@ func TestAttestCarriesConsulPermissionsFromPolicy(t *testing.T) {
 	}
 	if issuer.req.ConsulService != "demo" {
 		t.Fatalf("wrong consul service: %s", issuer.req.ConsulService)
+	}
+	if got := issuer.req.ConsulPermissions.ServiceNames; len(got) != 1 || got[0] != "egress-demo-worker-1-sidecar" {
+		t.Fatalf("wrong service names: %#v", got)
 	}
 	if got := issuer.req.ConsulPermissions.KeyPrefixes; len(got) != 1 || got[0] != "service/demo" {
 		t.Fatalf("wrong key prefixes: %#v", got)
@@ -581,11 +584,12 @@ func TestAttestCarriesNodeIdentityFromPolicy(t *testing.T) {
 
 func TestConsulACLRules(t *testing.T) {
 	got := mustConsulACLRules(t, ConsulPermissions{
+		ServiceNames:  []string{"egress-webdemo-webdemo-1-sidecar"},
 		KeyPrefixes:   []string{"service/demo"},
 		SessionWrite:  true,
 		AgentReadSelf: true,
 	}, "worker-1")
-	want := "agent \"worker-1\" {\n  policy = \"read\"\n}\nkey_prefix \"service/demo\" {\n  policy = \"write\"\n}\nsession_prefix \"\" {\n  policy = \"write\"\n}\n"
+	want := "agent \"worker-1\" {\n  policy = \"read\"\n}\nservice \"egress-webdemo-webdemo-1-sidecar\" {\n  policy = \"write\"\n}\nkey_prefix \"service/demo\" {\n  policy = \"write\"\n}\nsession_prefix \"\" {\n  policy = \"write\"\n}\n"
 	if got != want {
 		t.Fatalf("rules mismatch\nwant:\n%s\ngot:\n%s", want, got)
 	}

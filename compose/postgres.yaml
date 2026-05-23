@@ -1,0 +1,72 @@
+# Postgres workload compose template.
+#
+# A postgres CVM runs the platform sidecar plus Patroni/Postgres. The
+# sidecar provisions peer VIPs, route VIPs, Consul, mesh-conn, an egress
+# Envoy for every route, and a producer Envoy for the local postgres
+# backend. Patroni's role watcher owns the dynamic master/replica tags.
+
+services:
+  sidecar:
+    image: ${MESH_SIDECAR_IMAGE}
+    network_mode: host
+    restart: on-failure
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - ROLE=${WORKLOAD_GROUP}
+      - CLUSTER_NAME=${CLUSTER_NAME}
+      - WORKLOAD_ORDINAL=${WORKLOAD_ORDINAL}
+      - EXPECTED_REPLICAS=${EXPECTED_REPLICAS}
+      - PEERS_JSON=${PEERS_JSON}
+      - MESH_ROUTES_JSON=${MESH_ROUTES_JSON}
+      - LOCAL_BACKENDS_JSON=${LOCAL_BACKENDS_JSON}
+      - COORDINATOR_VIPS=${COORDINATOR_VIPS}
+      - SIGNALING_URL=${SIGNALING_URL}
+      - TURN_HOST=${TURN_HOST}
+      - TURN_SHARED_SECRET=${TURN_SHARED_SECRET}
+      - GOSSIP_KEY=${GOSSIP_KEY}
+      - ADMISSION_BROKER_ENABLE=${ADMISSION_BROKER_ENABLE:-}
+      - MESH_CONN_DEBUG_ICE=${MESH_CONN_DEBUG_ICE:-}
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock:ro
+      - /tmp/dstack-runtime/secrets:/run/secrets
+      - /tmp/dstack-runtime/instance:/run/instance
+      - /tmp/dstack-runtime/mesh:/run/mesh
+      - /tmp/dstack-runtime/consul-tokens:/run/consul-tokens
+      - consul-data:/consul/data
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /run/instance/info.json && test -f /run/mesh/hosts && test -x /run/mesh/exec.sh"]
+      interval: 2s
+      timeout: 1s
+      retries: 60
+      start_period: 5s
+
+  patroni:
+    image: ${PATRONI_IMAGE}
+    network_mode: host
+    restart: on-failure
+    environment:
+      - CLUSTER_NAME=${CLUSTER_NAME}
+      - PATRONI_SUPERUSER_PW=${PATRONI_SUPERUSER_PW}
+      - PATRONI_REPLICATION_PW=${PATRONI_REPLICATION_PW}
+      - ADMISSION_BROKER_ENABLE=${ADMISSION_BROKER_ENABLE:-}
+      - LOCAL_BACKENDS_JSON=${LOCAL_BACKENDS_JSON}
+      - PEERS_JSON=${PEERS_JSON}
+    volumes:
+      - /tmp/dstack-runtime/instance:/run/instance:ro
+      - /tmp/dstack-runtime/mesh:/run/mesh:ro
+      - /tmp/dstack-runtime/consul-tokens:/run/consul-tokens:ro
+      - /tmp/dstack-runtime/secrets:/run/secrets:ro
+      - patroni-pgdata:/var/lib/patroni
+    entrypoint: ["/run/mesh/exec.sh"]
+    command: ["/sbin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+    depends_on:
+      sidecar:
+        condition: service_healthy
+
+volumes:
+  consul-data:
+  patroni-pgdata:
+
+# Shared state goes through host bind mounts, not named docker volumes.
+# See coordinator.yaml for the platform note.

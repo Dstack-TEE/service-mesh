@@ -1,0 +1,62 @@
+# Webdemo workload compose template.
+#
+# A webdemo CVM runs the platform sidecar plus the webdemo application.
+# The sidecar provisions peer VIPs, route VIPs, Consul, mesh-conn, an
+# egress Envoy for every route, and a producer Envoy for the local
+# webdemo backend.
+
+services:
+  sidecar:
+    image: ${MESH_SIDECAR_IMAGE}
+    network_mode: host
+    restart: on-failure
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - ROLE=${WORKLOAD_GROUP}
+      - CLUSTER_NAME=${CLUSTER_NAME}
+      - WORKLOAD_ORDINAL=${WORKLOAD_ORDINAL}
+      - EXPECTED_REPLICAS=${EXPECTED_REPLICAS}
+      - PEERS_JSON=${PEERS_JSON}
+      - MESH_ROUTES_JSON=${MESH_ROUTES_JSON}
+      - LOCAL_BACKENDS_JSON=${LOCAL_BACKENDS_JSON}
+      - COORDINATOR_VIPS=${COORDINATOR_VIPS}
+      - SIGNALING_URL=${SIGNALING_URL}
+      - TURN_HOST=${TURN_HOST}
+      - TURN_SHARED_SECRET=${TURN_SHARED_SECRET}
+      - GOSSIP_KEY=${GOSSIP_KEY}
+      - ADMISSION_BROKER_ENABLE=${ADMISSION_BROKER_ENABLE:-}
+      - MESH_CONN_DEBUG_ICE=${MESH_CONN_DEBUG_ICE:-}
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock:ro
+      - /tmp/dstack-runtime/secrets:/run/secrets
+      - /tmp/dstack-runtime/instance:/run/instance
+      - /tmp/dstack-runtime/mesh:/run/mesh
+      - /tmp/dstack-runtime/consul-tokens:/run/consul-tokens
+      - consul-data:/consul/data
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /run/instance/info.json && test -f /run/mesh/hosts && test -x /run/mesh/exec.sh"]
+      interval: 2s
+      timeout: 1s
+      retries: 60
+      start_period: 5s
+
+  webdemo:
+    image: ${WEBDEMO_IMAGE}
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - PEER_ID=${WORKLOAD_GROUP}-${WORKLOAD_ORDINAL}
+    entrypoint: ["/run/mesh/exec.sh"]
+    command: ["/usr/local/bin/webdemo"]
+    volumes:
+      - /tmp/dstack-runtime/mesh:/run/mesh:ro
+    depends_on:
+      sidecar:
+        condition: service_healthy
+
+volumes:
+  consul-data:
+
+# Shared state goes through host bind mounts, not named docker volumes.
+# See coordinator.yaml for the platform note.

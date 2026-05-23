@@ -10,10 +10,10 @@
 //      replica of the same phala_app, never visible to the deploy
 //      host.
 //
-//   2. Claim a stable ordinal (0..N-1) for this CVM by atomic-CAS-ing
-//      a slot in Consul KV (workers only — the coordinator is always
-//      ordinal 0). The InstanceID is the slot's permanent owner so
-//      restarts re-find their own slot.
+//   2. Claim a stable ordinal (0..N-1) for this CVM by reading the
+//      Terraform-provided role ordinal, or by atomic-CAS-ing a slot in
+//      Consul KV for dynamic non-coordinator roles. The InstanceID is
+//      the slot's permanent owner so restarts re-find their own slot.
 //
 //   3. Write everything dependent services need to a tmpfs volume
 //      shared via compose. /run/secrets/{turn,ca-seed} are
@@ -110,14 +110,17 @@ func main() {
 
 	// 3. Ordinal selection.
 	//    Three sources, in order of preference:
-	//      a. WORKER_ORDINAL or COORDINATOR_ORDINAL env (set by
-	//         cluster.tf when each peer is its own phala_app —
-	//         sidesteps the Consul-bootstrap chicken-and-egg).
+	//      a. WORKLOAD_ORDINAL, WORKER_ORDINAL, or COORDINATOR_ORDINAL
+	//         env (set by cluster.tf when each peer is declared as a
+	//         named slot — sidesteps the Consul-bootstrap chicken-and-egg).
 	//      b. Consul KV CAS (the multi-server / dynamic case once
 	//         phala-cloud#243 lets us pass per-instance env to a
 	//         replicas:N app).
 	ordinal := 0
 	switch {
+	case cfg.HasWorkloadOrdinal:
+		ordinal = cfg.WorkloadOrdinal
+		log.Printf("ordinal from WORKLOAD_ORDINAL env: %d", ordinal)
 	case cfg.WorkerOrdinal > 0:
 		ordinal = cfg.WorkerOrdinal
 		log.Printf("ordinal from WORKER_ORDINAL env: %d", ordinal)
@@ -155,9 +158,11 @@ func main() {
 
 type Config struct {
 	ClusterName           string
-	Role                  string // coordinator | worker
+	Role                  string
 	ConsulHTTPAddr        string // 127.0.0.1:<port> on the local agent
 	ExpectedReplicas      int    // upper bound on ordinal slots to try
+	WorkloadOrdinal       int    // optional, set by cluster.tf per workload slot (>=0)
+	HasWorkloadOrdinal    bool   // distinguishes ordinal=0 from "unset"
 	WorkerOrdinal         int    // optional, set by cluster.tf per-worker (>0)
 	CoordinatorOrdinal    int    // optional, set by cluster.tf per-coordinator (>=0)
 	HasCoordinatorOrdinal bool   // distinguishes ordinal=0 from "unset"
@@ -169,6 +174,14 @@ func loadConfig() *Config {
 		Role:             mustEnv("ROLE"),
 		ConsulHTTPAddr:   os.Getenv("CONSUL_HTTP_ADDR"), // empty for coordinator
 		ExpectedReplicas: 16,                            // generous upper bound
+	}
+	if v := os.Getenv("WORKLOAD_ORDINAL"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			log.Fatalf("WORKLOAD_ORDINAL invalid: %q", v)
+		}
+		cfg.WorkloadOrdinal = n
+		cfg.HasWorkloadOrdinal = true
 	}
 	if v := os.Getenv("WORKER_ORDINAL"); v != "" {
 		n, err := strconv.Atoi(v)

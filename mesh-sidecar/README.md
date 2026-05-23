@@ -1,16 +1,16 @@
 # service-mesh mesh-sidecar
 
-The single image that holds every platform-plumbing process a worker or
-coordinator CVM runs:
+The single image that holds every platform-plumbing process a workload
+or coordinator CVM runs:
 
 | Process            | Role                                                     |
 |--------------------|----------------------------------------------------------|
 | `bootstrap-secrets` | One-shot init: derives per-CVM secrets from the dstack TEE KMS, claims an ordinal, writes `/run/instance/info.json`. |
 | `mesh-conn`         | QUIC-on-pion/ICE overlay: forwards Consul gossip + RPC + HTTP ports between peer CVMs over a NAT'd L3 path. |
 | `admission-broker`  | Coordinator-side TEE quote verifier and Consul ACL token issuer when attestation admission is enabled. |
-| `admission-client`  | Worker-side helper that gets dstack quotes and requests node/service tokens before Consul or Envoy registration. |
-| `consul`            | Server on coordinator CVMs (`-server -bootstrap-expect=N -ui`), client on worker CVMs. Joins via mesh-conn-forwarded loopback ports. |
-| `envoy`             | Connect-mTLS data plane on workers. Bootstrapped from the local consul agent's xDS once it's reachable. Coordinators don't run it. |
+| `admission-client`  | Workload-side helper that gets dstack quotes and requests node/service tokens before Consul or Envoy registration. |
+| `consul`            | Server on coordinator CVMs (`-server -bootstrap-expect=N -ui`), client on workload CVMs. Joins via mesh-conn-forwarded loopback ports. |
+| `envoy`             | Connect-mTLS data plane on workload CVMs. Bootstrapped from the local consul agent's xDS once it's reachable. Coordinators don't run it. |
 
 Replaces the earlier split-process layout with one platform sidecar
 that supervises the mesh, Consul, Envoy, and attestation-admission
@@ -28,13 +28,16 @@ bundle of mesh plumbing, not just an Envoy sidecar.
 
 1. Runs `bootstrap-secrets` to completion (it's a one-shot — exit 0
    means `/run/instance/info.json` and `/run/secrets/*` are in place).
-2. Starts `mesh-conn` in the background.
-3. Starts `consul agent` in the background, with `-server` +
+2. (Workloads only) Provisions service VIPs and writes `/run/mesh/hosts`
+   plus `/run/mesh/exec.sh` for app containers.
+3. Starts `mesh-conn` in the background.
+4. Starts `consul agent` in the background, with `-server` +
    `-bootstrap-expect=N` if `ROLE=coordinator`.
-4. (Workers only) Waits until the local Consul client sees an alive
-   server, requests admission tokens, registers each service, then
-   polls `consul connect envoy -bootstrap` until it can exec envoy.
-5. `wait -n`s on all background processes — if any one exits, the
+5. (Workloads only) Waits until the local Consul client sees an alive
+   server, requests admission tokens, registers egress and producer
+   sidecars, then polls `consul connect envoy -bootstrap` until it can
+   exec envoy.
+6. `wait -n`s on all background processes — if any one exits, the
    container exits with that code, and compose's
    `restart: on-failure` brings it back.
 

@@ -42,16 +42,11 @@ services:
       - ROLE=coordinator
       - CLUSTER_NAME=${CLUSTER_NAME}
       - PEERS_JSON=${PEERS_JSON}
-      # SERVICES_JSON is the same content workers see — same shape, same
-      # source-of-truth (local.mesh_services in cluster.tf). Coordinators
-      # don't run Envoy sidecars, but coord-0 needs the service list so
-      # its config-entry writer can emit per-service service-resolver
-      # entries + intentions on cluster bringup. Without this, the
-      # config-entry writer only writes proxy-defaults/global and the
-      # whole Connect routing layer ends up with no resolvers, which
-      # manifests downstream as replicas' pg_basebackup connections
-      # closing on accept (empty EDS endpoint set).
-      - SERVICES_JSON=${SERVICES_JSON}
+      # MESH_ROUTES_JSON is the global callable route list. Coordinators
+      # don't run Envoy sidecars, but coord-0 needs the routes so its
+      # config-entry writer can emit service-resolver entries and
+      # intentions on cluster bringup.
+      - MESH_ROUTES_JSON=${MESH_ROUTES_JSON}
       # COORDINATOR_ORDINAL is per-CVM (0..N-1); makes bootstrap-secrets
       # write the right /run/instance/info.json without needing Consul
       # KV (which itself runs on the coordinators — chicken-and-egg).
@@ -61,7 +56,7 @@ services:
       # for retry-join (skipping self).
       - COORDINATOR_VIPS=${COORDINATOR_VIPS}
       # External coordinator path: coordinator mesh-conn uses the same
-      # public bootstrap endpoint that workers do, so peer-pair NAT
+      # public bootstrap endpoint that workload CVMs do, so peer-pair NAT
       # traversal setup happens in a single shared place.
       - SIGNALING_URL=${SIGNALING_URL}
       - TURN_HOST=${TURN_HOST}

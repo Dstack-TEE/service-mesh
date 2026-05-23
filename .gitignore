@@ -5,6 +5,7 @@
 # Local run artifacts
 .local/
 snapshots/
+.env
 
 # Compiled Go binaries
 admission-broker/admission-broker

@@ -107,6 +107,7 @@ type Workload struct {
 }
 
 type ConsulPermissions struct {
+	ServiceNames     []string `json:"service_names,omitempty"`
 	KeyPrefixes      []string `json:"key_prefixes,omitempty"`
 	SessionWrite     bool     `json:"session_write,omitempty"`
 	AgentReadSelf    bool     `json:"agent_read_self,omitempty"`
@@ -168,6 +169,13 @@ func ParsePolicy(b []byte) (*Policy, error) {
 		w.ConsulService = strings.TrimSpace(w.ConsulService)
 		if w.ConsulService == "" && !w.ConsulPermissions.hasGrant() {
 			return nil, fmt.Errorf("workloads[%d] must define consul_service or consul_permissions", i)
+		}
+		for j, serviceName := range w.ConsulPermissions.ServiceNames {
+			serviceName = strings.TrimSpace(serviceName)
+			if err := validateConsulAgentName(serviceName); err != nil {
+				return nil, fmt.Errorf("workloads[%d].consul_permissions.service_names[%d]: %w", i, j, err)
+			}
+			w.ConsulPermissions.ServiceNames[j] = serviceName
 		}
 		for j, prefix := range w.ConsulPermissions.KeyPrefixes {
 			prefix = strings.Trim(prefix, "/")
@@ -887,6 +895,13 @@ func consulACLRules(p ConsulPermissions, peerID string) (string, error) {
 		}
 		fmt.Fprintf(&b, "agent %q {\n  policy = \"read\"\n}\n", peerID)
 	}
+	for _, serviceName := range p.ServiceNames {
+		serviceName = strings.TrimSpace(serviceName)
+		if err := validateConsulAgentName(serviceName); err != nil {
+			return "", fmt.Errorf("service_names requires valid Consul service names: %w", err)
+		}
+		fmt.Fprintf(&b, "service %q {\n  policy = \"write\"\n}\n", serviceName)
+	}
 	for _, prefix := range p.KeyPrefixes {
 		prefix = strings.Trim(prefix, "/")
 		if prefix == "" {
@@ -901,7 +916,7 @@ func consulACLRules(p ConsulPermissions, peerID string) (string, error) {
 }
 
 func (p ConsulPermissions) hasGrant() bool {
-	return len(p.KeyPrefixes) > 0 || p.SessionWrite || p.AgentReadSelf || p.NodeIdentitySelf
+	return len(p.ServiceNames) > 0 || len(p.KeyPrefixes) > 0 || p.SessionWrite || p.AgentReadSelf || p.NodeIdentitySelf
 }
 
 func validateConsulAgentName(name string) error {

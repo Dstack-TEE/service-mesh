@@ -9,9 +9,9 @@
 //	              aggregate replies; demonstrates Envoy-LB across peers
 //
 // Platform plumbing — Consul registration, sidecar provisioning,
-// /etc/hosts entries, service-VIP allocation — happens entirely in
-// `mesh-sidecar/entrypoint.sh` from `SERVICES_JSON`. The app binary
-// has zero awareness of any of it; it just binds and serves.
+// service-VIP allocation, and mesh name setup via /run/mesh/exec.sh —
+// happens outside this binary. The app has zero awareness of any of it;
+// it just binds and serves.
 package main
 
 import (

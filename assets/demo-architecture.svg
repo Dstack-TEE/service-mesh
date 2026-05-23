@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="760" viewBox="0 0 1440 760" role="img" aria-labelledby="title desc">
+  <title id="title">Default service-mesh demo architecture</title>
+  <desc id="desc">User traffic reaches the webdemo workload through the gateway endpoint. Webdemo calls PostgreSQL through mesh route names. Each workload has a compact Envoy box and Consul box. Patroni uses Consul for leader election and role tags.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto">
+      <path d="M 1 1 L 11 6 L 1 11 Z" fill="#f8fafc"/>
+    </marker>
+    <marker id="arrow-muted" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 1 1 L 11 6 L 1 11 Z" fill="#cbd5e1"/>
+    </marker>
+    <marker id="arrow-mesh" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 1 1 L 11 6 L 1 11 Z" fill="#34d399"/>
+    </marker>
+    <style>
+      .bg { fill: #080c11; }
+      .column { fill: #0d1117; stroke: #a8b0bd; stroke-width: 4; }
+      .box { fill: #1f2937; stroke: #64748b; stroke-width: 1.5; }
+      .app { fill: #102033; stroke: #60a5fa; stroke-width: 1.8; }
+      .envoy { fill: #11251e; stroke: #34d399; stroke-width: 1.8; }
+      .consul { fill: #211d2d; stroke: #c4b5fd; stroke-width: 1.8; }
+      .mesh-band { fill: #1e293b; opacity: 0.82; }
+      .gossip-band { fill: #d1d5db; opacity: 0.92; }
+      .rpc-band { fill: #475569; opacity: 0.94; }
+      .line { fill: none; stroke: #f8fafc; stroke-width: 3; marker-end: url(#arrow); }
+      .dashed { fill: none; stroke: #cbd5e1; stroke-width: 2.5; stroke-dasharray: 8 8; marker-end: url(#arrow-muted); }
+      .mesh-line { fill: none; stroke: #34d399; stroke-width: 2.5; stroke-dasharray: 8 8; marker-end: url(#arrow-mesh); }
+      .text { fill: #f8fafc; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .muted { fill: #cbd5e1; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .dark { fill: #111827; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .label { font-size: 29px; font-weight: 750; }
+      .medium { font-size: 22px; font-weight: 650; }
+      .small { font-size: 18px; }
+      .coord-small { font-size: 16px; }
+      .route { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 19px; font-weight: 750; }
+      .user-icon { fill: none; stroke: #f8fafc; stroke-width: 3; stroke-linecap: round; }
+      .check { fill: #10b981; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1440" height="760"/>
+
+  <rect class="mesh-band" x="392" y="314" width="760" height="124"/>
+  <rect class="gossip-band" x="236" y="528" width="916" height="50"/>
+  <rect class="rpc-band" x="236" y="594" width="916" height="50"/>
+
+  <g transform="translate(84 114)">
+    <rect class="box" x="0" y="0" width="112" height="112" rx="7"/>
+    <circle class="user-icon" cx="56" cy="37" r="13"/>
+    <path class="user-icon" d="M 30 78 C 30 59 82 59 82 78"/>
+    <text class="text label" x="56" y="160" text-anchor="middle">User</text>
+  </g>
+
+  <g transform="translate(392 72)">
+    <rect class="column" x="0" y="0" width="220" height="620" rx="7"/>
+    <rect class="app" x="60" y="56" width="100" height="84" rx="7"/>
+    <text class="text medium" x="110" y="94" text-anchor="middle">app</text>
+    <circle class="check" cx="160" cy="134" r="18"/>
+    <path d="M 150 134 L 158 142 L 172 124" fill="none" stroke="#f8fafc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text class="text label" x="110" y="194" text-anchor="middle">webdemo</text>
+    <text class="muted medium" x="110" y="224" text-anchor="middle">2 CVMs</text>
+
+    <rect class="envoy" x="60" y="304" width="100" height="72" rx="7"/>
+    <text class="text medium" x="110" y="348" text-anchor="middle">Envoy</text>
+
+    <rect class="consul" x="60" y="476" width="100" height="72" rx="7"/>
+    <text class="text medium" x="110" y="520" text-anchor="middle">Consul</text>
+  </g>
+
+  <g transform="translate(824 72)">
+    <rect class="column" x="0" y="0" width="220" height="620" rx="7"/>
+    <rect class="app" x="60" y="56" width="100" height="64" rx="7"/>
+    <text class="text small" x="110" y="94" text-anchor="middle">Postgres</text>
+    <circle class="check" cx="160" cy="114" r="18"/>
+    <path d="M 150 114 L 158 122 L 172 104" fill="none" stroke="#f8fafc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect class="app" x="60" y="148" width="100" height="64" rx="7"/>
+    <text class="text small" x="110" y="176" text-anchor="middle">Patroni</text>
+    <text class="muted small" x="110" y="200" text-anchor="middle">election</text>
+    <text class="text label" x="110" y="254" text-anchor="middle">postgres</text>
+    <text class="muted medium" x="110" y="284" text-anchor="middle">3 CVMs</text>
+
+    <rect class="envoy" x="60" y="304" width="100" height="72" rx="7"/>
+    <text class="text medium" x="110" y="348" text-anchor="middle">Envoy</text>
+
+    <rect class="consul" x="60" y="476" width="100" height="72" rx="7"/>
+    <text class="text medium" x="110" y="520" text-anchor="middle">Consul</text>
+  </g>
+
+  <g transform="translate(52 486)">
+    <rect class="column" x="0" y="0" width="184" height="206" rx="7"/>
+    <text class="text label" x="92" y="44" text-anchor="middle">Coordinator</text>
+    <rect class="box" x="14" y="68" width="156" height="36" rx="5"/>
+    <text class="text coord-small" x="92" y="91" text-anchor="middle">admission broker</text>
+    <rect class="box" x="14" y="116" width="156" height="36" rx="5"/>
+    <text class="text coord-small" x="92" y="139" text-anchor="middle">dstack verifier</text>
+    <rect class="box" x="14" y="164" width="156" height="30" rx="5"/>
+    <text class="text coord-small" x="92" y="184" text-anchor="middle">Consul servers</text>
+  </g>
+
+  <path class="line" d="M 196 170 H 392"/>
+  <text class="text route" x="294" y="144" text-anchor="middle">gateway-endpoint</text>
+  <text class="text route" x="294" y="198" text-anchor="middle">8080</text>
+
+  <path class="line" d="M 612 170 H 824"/>
+  <text class="text route" x="718" y="144" text-anchor="middle">postgres-master</text>
+  <text class="text route" x="718" y="198" text-anchor="middle">5432</text>
+
+  <path class="mesh-line" d="M 502 376 V 212"/>
+  <path class="mesh-line" d="M 552 412 H 884"/>
+
+  <path class="dashed" d="M 984 252 H 1010 V 584 H 984"/>
+  <text class="dark medium" x="718" y="562" text-anchor="middle">gossip</text>
+  <text class="text medium" x="718" y="628" text-anchor="middle">RPC + admission</text>
+</svg>

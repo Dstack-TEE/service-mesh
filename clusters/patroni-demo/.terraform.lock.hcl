@@ -23,16 +23,16 @@ provider "registry.terraform.io/hashicorp/random" {
 }
 
 provider "registry.terraform.io/phala-network/phala" {
-  version     = "0.3.0-beta.3"
-  constraints = "0.3.0-beta.3"
+  version     = "0.3.0-beta.4"
+  constraints = "0.3.0-beta.4"
   hashes = [
-    "h1:GYujKLmEZIY7rRlVGnNnJ8eXfbCjKOUx7g1nwICtSzg=",
-    "zh:47728bf26573e88c67c8878aaf1deef734549e35b0326ca018af2a2e7da75eab",
-    "zh:8408f1a2aba5f4a0bf3ac710ec250aa49c89b5c4e1d6c37b28cc4835f2e826c4",
-    "zh:8eb8c30c73ed89c9995ce3b06d5af0f47c0fe590f337172fc13f213fcf7b77e1",
-    "zh:a1a7aae54d459bb5b5fa503d2d2fa7a9d8403d843c48b6f66fda783624b7f1e7",
-    "zh:b7cc8a2e03375ef485854ced9b2573fd3551d3d2a89285469123cd596c309367",
-    "zh:d33c2031dedd465a1a8e4da4fed2a928222a1074952282843df244ae09b383df",
+    "h1:vhR7UkAIwZ1sfv7EKcuo9auUOGlw7ymiJWiG4Vwv0HU=",
+    "zh:0bd33fd2d6e9c53b7f1d56f0eac5129ab065be79927d1f0f63b36e67bd965070",
+    "zh:0f8ca2ac179aeca6dfb89f9b99b90f8c4dc956ab5bd847006def584e01b65dce",
+    "zh:247012cd56cbaaa789b5643cd09217ca7c86a81c2e79fb1ca349fbc7ee2584c6",
+    "zh:68435723308a6bf8c929f21f6d9149604ac99d520885a5fd8f1656acddae9dbb",
+    "zh:6c0fb2a42b7bdc28582c511469a3ca46bb9c911bafcab7d8443b2d0bdb10124d",
+    "zh:f4bd718e747c77ddb95498b90eef45705ae271c0b6136b7fdc4531af03de3bd1",
     "zh:f809ab383cca0a5f83072981c64208cbd7fa67e986a86ee02dd2c82333221e32",
   ]
 }

@@ -15,7 +15,7 @@ in their face.
 |---|---|
 | [`attestation-admission.md`](attestation-admission.md) | Phase 1 admission is implemented. Remaining work: token lifecycle, non-NAT secret distribution, upgrade policy, and rendezvous hardening. |
 | [`terraform-slot-api.md`](terraform-slot-api.md) | Provider slot resources are implemented and validated. Remaining work: slot-preserving revision rollout through the Cloud redeploy endpoint. |
-| [`workload-groups-refactor.md`](workload-groups-refactor.md) | Historical design notes for the workload-group split now implemented in `cluster-example`. |
+| [`workload-groups-refactor.md`](workload-groups-refactor.md) | Historical design notes for the workload-group split now implemented in `clusters/patroni-demo`. |
 
 Each doc includes:
 

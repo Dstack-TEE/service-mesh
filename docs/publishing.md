@@ -25,11 +25,11 @@ when any of the four image build contexts (or the workflow itself)
 change, and on PRs touching the same paths. Each run:
 
 - Builds all four images via a matrix job. The `mesh-sidecar` build
-  uses the repository root as its docker context (instead of
-  `mesh-sidecar/`) so its Dockerfile can pull the
-  embedded Go components from sibling directories:
-  `bootstrap-secrets/`, `mesh-conn/`, `admission-broker/`, and
-  `admission-client/`.
+  uses the repository root as its Docker context (instead of
+  `components/mesh-sidecar/`) so its Dockerfile can pull the embedded
+  Go components from `components/bootstrap-secrets/`,
+  `components/mesh-conn/`, `components/admission-broker/`, and
+  `components/admission-client/`.
 - On `main`, pushes to `ghcr.io/dstack-tee/service-mesh/<name>` with two tags: the long-form commit SHA (`sha-<40-hex>`) and `latest`.
 - Generates a GitHub Build Provenance attestation per image via
   `actions/attest-build-provenance@v2`. The attestation is signed by
@@ -68,15 +68,15 @@ of `latest` doesn't silently swap your cluster's bits.
 When iterating fast on the mesh-sidecar (or any other component) you
 don't want to round-trip through CI for every byte. Two equivalent
 shortcuts. Note that `mesh-sidecar` builds from the repository root
-(it pulls Go sources from sibling subdirs); the rest build from their
-own subdir.
+(it pulls Go sources from `components/`); the rest build from their
+own workload/component subdir.
 
 ### a) `ttl.sh` (24h-disposable, no auth)
 
 ```bash
 TS=$(date +%s)
 TAG=ttl.sh/dstack-mesh-sidecar-${TS}:24h
-docker build -t $TAG -f mesh-sidecar/Dockerfile .
+docker build -t $TAG -f components/mesh-sidecar/Dockerfile .
 docker push $TAG
 ```
 
@@ -93,7 +93,7 @@ If you want a longer-lived dev image without going through main:
 ```bash
 echo "$GITHUB_TOKEN" | docker login ghcr.io -u <your-user> --password-stdin
 TAG=ghcr.io/<your-user>/service-mesh/mesh-sidecar:dev-$(date +%s)
-docker build -t $TAG -f mesh-sidecar/Dockerfile .
+docker build -t $TAG -f components/mesh-sidecar/Dockerfile .
 docker push $TAG
 ```
 
@@ -140,7 +140,7 @@ When CI publishes new images:
    `:sha-...` tag from the new run (recommended). Find the new SHA by
    inspecting the workflow run's output or `gh run view`.
 2. For a new cluster, edit
-   `cluster-example/terraform.tfvars` to that pin
+   `clusters/patroni-demo/terraform.tfvars` to that pin
    before `terraform apply`.
 3. For an existing provider-0.3 named-slot cluster, app-level image
    and compose changes are blocked until the Cloud revision-redeploy

@@ -19,29 +19,29 @@
 
 FROM golang:1.24-alpine AS bootstrap-build
 WORKDIR /src
-COPY bootstrap-secrets/go.mod bootstrap-secrets/go.sum ./
+COPY components/bootstrap-secrets/go.mod components/bootstrap-secrets/go.sum ./
 RUN go mod download
-COPY bootstrap-secrets/*.go ./
+COPY components/bootstrap-secrets/*.go ./
 RUN CGO_ENABLED=0 go build -o /out/bootstrap-secrets .
 
 FROM golang:1.24-alpine AS mesh-build
 WORKDIR /src
-COPY mesh-conn/go.mod mesh-conn/go.sum ./
+COPY components/mesh-conn/go.mod components/mesh-conn/go.sum ./
 RUN go mod download
-COPY mesh-conn/*.go ./
+COPY components/mesh-conn/*.go ./
 RUN CGO_ENABLED=0 go build -o /out/mesh-conn .
 
 FROM golang:1.24-alpine AS admission-build
 WORKDIR /src
-COPY admission-broker/go.mod ./
-COPY admission-broker/*.go ./
+COPY components/admission-broker/go.mod ./
+COPY components/admission-broker/*.go ./
 RUN CGO_ENABLED=0 go build -o /out/admission-broker .
 
 FROM golang:1.24-alpine AS admission-client-build
 WORKDIR /src
-COPY admission-client/go.mod admission-client/go.sum ./
+COPY components/admission-client/go.mod components/admission-client/go.sum ./
 RUN go mod download
-COPY admission-client/*.go ./
+COPY components/admission-client/*.go ./
 RUN CGO_ENABLED=0 go build -o /out/admission-client .
 
 FROM hashicorp/consul:1.19 AS consul-bin
@@ -59,7 +59,7 @@ COPY --from=mesh-build      /out/mesh-conn         /usr/local/bin/mesh-conn
 COPY --from=admission-build /out/admission-broker  /usr/local/bin/admission-broker
 COPY --from=admission-client-build /out/admission-client /usr/local/bin/admission-client
 COPY --from=consul-bin      /bin/consul            /usr/local/bin/consul
-COPY mesh-sidecar/entrypoint.sh                    /usr/local/bin/entrypoint.sh
+COPY components/mesh-sidecar/entrypoint.sh         /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Persistent consul state — workers' KV cache and coordinators' Raft log.

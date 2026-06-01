@@ -1,4 +1,4 @@
-module github.com/Dstack-TEE/service-mesh/bootstrap-secrets
+module github.com/Dstack-TEE/service-mesh/components/bootstrap-secrets
 
 go 1.24.0
 

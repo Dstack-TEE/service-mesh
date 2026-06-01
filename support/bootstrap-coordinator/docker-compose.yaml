@@ -4,7 +4,7 @@
 #
 # Image tags pin to `:latest` from GHCR for clarity here; pin to
 # `:sha-<full-sha>` (or a digest) for production deploys — see
-# ../docs/publishing.md.
+# ../../docs/publishing.md.
 
 services:
   coturn:

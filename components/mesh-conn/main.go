@@ -647,7 +647,7 @@ func (m *Mesh) dialAndPump(parentCtx context.Context, peer Peer, sess *peerSessi
 	// 3. Bind allowlist listeners on the peer's VIP. UDP only for ports
 	//    flagged UDP=true (currently only 8301); TCP for every entry.
 	//    Aliases like 127.50.0.<peer.Vip>/32 are provisioned by
-	//    mesh-sidecar/entrypoint.sh before mesh-conn starts; failing
+	//    components/mesh-sidecar/entrypoint.sh before mesh-conn starts; failing
 	//    here means the alias didn't get set up.
 	peerVip := peer.vipAddr()
 	udpSocks := map[int]*net.UDPConn{} // port -> listener (only UDP-bearing ports)

@@ -1,0 +1,86 @@
+# Starter worker workload compose template.
+#
+# A worker CVM runs the platform sidecar plus one private HTTP worker.
+
+services:
+  sidecar:
+    image: ${MESH_SIDECAR_IMAGE}
+    network_mode: host
+    restart: on-failure
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - ROLE=${WORKLOAD_GROUP}
+      - CLUSTER_NAME=${CLUSTER_NAME}
+      - WORKLOAD_ORDINAL=${WORKLOAD_ORDINAL}
+      - EXPECTED_REPLICAS=${EXPECTED_REPLICAS}
+      - PEERS_JSON=${PEERS_JSON}
+      - MESH_ROUTES_JSON=${MESH_ROUTES_JSON}
+      - LOCAL_BACKENDS_JSON=${LOCAL_BACKENDS_JSON}
+      - COORDINATOR_VIPS=${COORDINATOR_VIPS}
+      - SIGNALING_URL=${SIGNALING_URL}
+      - TURN_HOST=${TURN_HOST}
+      - TURN_SHARED_SECRET=${TURN_SHARED_SECRET}
+      - GOSSIP_KEY=${GOSSIP_KEY}
+      - ADMISSION_BROKER_ENABLE=${ADMISSION_BROKER_ENABLE:-}
+      - MESH_CONN_DEBUG_ICE=${MESH_CONN_DEBUG_ICE:-}
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock:ro
+      - /tmp/dstack-runtime/secrets:/run/secrets
+      - /tmp/dstack-runtime/instance:/run/instance
+      - /tmp/dstack-runtime/mesh:/run/mesh
+      - /tmp/dstack-runtime/consul-tokens:/run/consul-tokens
+      - consul-data:/consul/data
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /run/instance/info.json && test -f /run/mesh/hosts && test -x /run/mesh/exec.sh"]
+      interval: 2s
+      timeout: 1s
+      retries: 60
+      start_period: 5s
+
+  worker:
+    image: ${WORKER_IMAGE}
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - PEER_ID=${WORKLOAD_GROUP}-${WORKLOAD_ORDINAL}
+    entrypoint: ["/run/mesh/exec.sh"]
+    command:
+      - python3
+      - -c
+      - |
+        import http.server
+        import os
+        import socketserver
+
+        NAME = os.environ.get("PEER_ID", "worker")
+        PORT = 9090
+
+        class Server(socketserver.ThreadingTCPServer):
+            allow_reuse_address = True
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path != "/hello":
+                    self.send_error(404)
+                    return
+                data = f"hello from {NAME}\n".encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, fmt, *args):
+                print(f"{self.client_address[0]} - {fmt % args}", flush=True)
+
+        print(f"worker: {NAME} listening on 127.0.0.1:{PORT}", flush=True)
+        Server(("127.0.0.1", PORT), Handler).serve_forever()
+    volumes:
+      - /tmp/dstack-runtime/mesh:/run/mesh:ro
+    depends_on:
+      sidecar:
+        condition: service_healthy
+
+volumes:
+  consul-data:

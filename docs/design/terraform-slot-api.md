@@ -11,7 +11,7 @@ Provider beta released; downstream migration validated.
 - Local consumer repo: `service-mesh`
 - Provider release artifact: GitHub release `v0.3.0-beta.1`
 - Registry status: indexed by Terraform Registry on 2026-05-19.
-- Consumer status: `cluster-example` initializes with the public
+- Consumer status: `clusters/patroni-demo` initializes with the public
   provider, validates, applies a real 3-coordinator / 3-worker
   named-slot cluster, refreshes to a no-op plan, and destroys cleanly.
 
@@ -149,7 +149,7 @@ current concrete CVM.
   identity when available.
 - Existing provider tests still pass.
 - New slot tests cover the intended lifecycle.
-- `cluster-example` can be updated without copying
+- `clusters/patroni-demo` can be updated without copying
   app or instance configuration between unrelated Terraform resources.
 - A real apply/destroy can create the 3-coordinator / 3-worker cluster
   using public or explicitly pinned provider artifacts.

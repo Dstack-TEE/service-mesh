@@ -15,8 +15,8 @@ name: Publish service-mesh images
 #
 # `mesh-sidecar` is the consolidated platform-plumbing image. Its build
 # context is the repository root so its Dockerfile
-# can pull the Go sources from sibling subdirs. The other three images
-# build from their own subdirs.
+# can pull Go sources from component subdirs. The other three images
+# build from their workload/component subdirs.
 #
 # Verifying a published image (consumer side):
 #
@@ -28,25 +28,25 @@ on:
   push:
     branches: [main]
     paths:
-      - 'bootstrap-secrets/**'
-      - 'admission-broker/**'
-      - 'admission-client/**'
-      - 'mesh-conn/**'
-      - 'mesh-sidecar/**'
-      - 'patroni/**'
-      - 'webdemo/**'
-      - 'signaling/**'
+      - 'components/bootstrap-secrets/**'
+      - 'components/admission-broker/**'
+      - 'components/admission-client/**'
+      - 'components/mesh-conn/**'
+      - 'components/mesh-sidecar/**'
+      - 'components/signaling/**'
+      - 'workloads/patroni/**'
+      - 'workloads/webdemo/**'
       - '.github/workflows/publish.yml'
   pull_request:
     paths:
-      - 'bootstrap-secrets/**'
-      - 'admission-broker/**'
-      - 'admission-client/**'
-      - 'mesh-conn/**'
-      - 'mesh-sidecar/**'
-      - 'patroni/**'
-      - 'webdemo/**'
-      - 'signaling/**'
+      - 'components/bootstrap-secrets/**'
+      - 'components/admission-broker/**'
+      - 'components/admission-client/**'
+      - 'components/mesh-conn/**'
+      - 'components/mesh-sidecar/**'
+      - 'components/signaling/**'
+      - 'workloads/patroni/**'
+      - 'workloads/webdemo/**'
       - '.github/workflows/publish.yml'
   workflow_dispatch:
 
@@ -69,18 +69,16 @@ jobs:
       matrix:
         include:
           # `mesh-sidecar` builds with the parent dir as context so
-          # its Dockerfile can pull bootstrap-secrets/, mesh-conn/,
-          # admission-broker/, and admission-client/ Go sources from
-          # siblings.
+          # its Dockerfile can pull Go sources from components/.
           - name: mesh-sidecar
             context: .
-            dockerfile: mesh-sidecar/Dockerfile
+            dockerfile: components/mesh-sidecar/Dockerfile
           - name: patroni
-            context: ./patroni
+            context: ./workloads/patroni
           - name: webdemo
-            context: ./webdemo
+            context: ./workloads/webdemo
           - name: signaling
-            context: ./signaling
+            context: ./components/signaling
 
     steps:
       - uses: actions/checkout@v4
@@ -115,7 +113,7 @@ jobs:
           context: ${{ matrix.context }}
           # Most images use the default Dockerfile in the context.
           # `mesh-sidecar` overrides this to point at
-          # mesh-sidecar/Dockerfile while keeping the parent context.
+          # components/mesh-sidecar/Dockerfile while keeping the parent context.
           file: ${{ matrix.dockerfile || format('{0}/Dockerfile', matrix.context) }}
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}

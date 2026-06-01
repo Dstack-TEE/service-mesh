@@ -1,14 +1,14 @@
-# Example cluster — peer-VIP / service-VIP layout.
+# Starter cluster — peer-VIP / service-VIP layout.
 #
 # This whole HCL file IS the cluster definition. To bring up an
-# HA Postgres + webdemo cluster on dstack:
+# API + worker starter cluster on dstack:
 #
 #   PHALA_CLOUD_API_KEY=$(your token) terraform apply -parallelism=1
 #
 # Uses the phala-network/phala 0.3 named-slot (MIG) model:
 # coordinators and each workload group are each ONE `phala_app` with a
 # `members` list, and each slot is a `phala_app_instance`. Slot identity
-# (`${cluster}-coordinator-0`, `${cluster}-webdemo-1`, …) is stable
+# (`${cluster}-coordinator-0`, `${cluster}-api-1`, …) is stable
 # across CVM replacement; the underlying `vm_uuid` may change but the
 # Terraform-declared name does not.
 #
@@ -22,7 +22,8 @@ terraform {
       source = "phala-network/phala"
       # 0.3.0-beta.3 exposes gateway_base_domain so public URLs can be
       # derived from provider state instead of a hardcoded gateway suffix.
-      version = "0.3.0-beta.3"
+      # 0.3.0-beta.4 is the official-Go-SDK migration build.
+      version = "0.3.0-beta.4"
     }
     random = {
       source  = "hashicorp/random"
@@ -35,20 +36,19 @@ provider "phala" {}
 
 # ---------- Cluster-wide shared secrets (WORKAROUND) ----------
 #
-# These three secrets MUST be byte-identical across every CVM that
-# joins the cluster (gossip auth, Patroni replication, Patroni superuser).
-# The principled answer is "derive them in the TEE, never let a human
-# touch them" — see ../docs/design/attestation-admission.md.
+# The gossip key MUST be byte-identical across every CVM that joins the
+# cluster. The principled answer is "derive it in the TEE, never let a
+# human touch it" — see ../../docs/design/attestation-admission.md.
 #
 # Migration note: in the v0.3 MIG model, all coordinators share ONE
 # `app_id` and each workload group app has its own `app_id`, so within
 # a role `dstack.GetKey()` now returns the same bytes on every peer. That
 # unlocks in-TEE derivation for role-local secrets in a future change.
 # However the secrets here are CROSS-ROLE (coordinators AND workload
-# apps need the same gossip_key, etc.), and the coordinator and workload
-# apps have different `app_id`s, so cross-role derivation still
-# needs an external source. The terraform-generated random_bytes
-# below remain the temporary workaround until attestation-rooted secret
+# apps need the same gossip_key), and the coordinator and workload apps
+# have different `app_id`s, so cross-role derivation still needs an
+# external source. The terraform-generated random_bytes below remain
+# the temporary workaround until attestation-rooted secret
 # generation and distribution lands.
 #
 # Trade-off accepted: anyone with read access to terraform.tfstate
@@ -60,12 +60,6 @@ provider "phala" {}
 resource "random_bytes" "gossip_key" {
   length = 32
 }
-resource "random_bytes" "patroni_superuser_pw" {
-  length = 32
-}
-resource "random_bytes" "patroni_replication_pw" {
-  length = 32
-}
 resource "random_bytes" "consul_management_token" {
   length = 32
 }
@@ -74,34 +68,34 @@ resource "random_bytes" "consul_management_token" {
 
 variable "cluster_name" {
   type    = string
-  default = "demo"
+  default = "starter"
 }
 
 variable "coordinator_replicas" {
   type        = number
-  default     = 3
-  description = "Number of voting Consul-server CVMs. 3 gives fault tolerance of 1; 5 of 2."
+  default     = 1
+  description = "Number of voting Consul-server CVMs. Use 3 or 5 for a fault-tolerant cluster."
 }
 
-variable "webdemo_replicas" {
+variable "api_replicas" {
   type        = number
-  default     = 2
-  description = "Number of webdemo workload CVMs."
+  default     = 1
+  description = "Number of API workload CVMs."
 
   validation {
-    condition     = var.webdemo_replicas > 0
-    error_message = "webdemo_replicas must be positive."
+    condition     = var.api_replicas > 0
+    error_message = "api_replicas must be positive."
   }
 }
 
-variable "postgres_replicas" {
+variable "worker_replicas" {
   type        = number
-  default     = 3
-  description = "Number of Patroni/Postgres workload CVMs. Use 3 or more for HA."
+  default     = 1
+  description = "Number of worker workload CVMs."
 
   validation {
-    condition     = var.postgres_replicas > 0
-    error_message = "postgres_replicas must be positive."
+    condition     = var.worker_replicas > 0
+    error_message = "worker_replicas must be positive."
   }
 }
 
@@ -110,8 +104,8 @@ variable "postgres_replicas" {
 # Coordinators and workload groups all reference it; ROLE selects runtime
 # behavior.
 variable "mesh_sidecar_image" { type = string }
-variable "webdemo_image" { type = string }
-variable "patroni_image" { type = string }
+variable "api_image" { type = string }
+variable "worker_image" { type = string }
 variable "dstack_verifier_image" {
   type        = string
   default     = "dstacktee/dstack-verifier:0.5.9"
@@ -208,64 +202,54 @@ locals {
   }
 
   workload_groups = {
-    webdemo = {
-      replicas = var.webdemo_replicas
-      compose  = "${path.module}/../compose/webdemo.yaml"
+    api = {
+      replicas = var.api_replicas
+      compose  = "${path.module}/compose/api.yaml"
       images = {
-        WEBDEMO_IMAGE = var.webdemo_image
+        API_IMAGE = var.api_image
       }
       secrets = {}
       backends = {
-        webdemo = {
+        api = {
           port     = 8080
-          workload = "webdemo"
+          workload = "api"
           registration = {
             owner  = "platform"
-            parent = "webdemo"
+            parent = "api"
           }
           consul_permissions = {}
         }
       }
       routes = {
-        webdemo = {
-          backend = "webdemo"
+        api = {
+          backend = "api"
           role    = null
         }
       }
     }
 
-    postgres = {
-      replicas = var.postgres_replicas
-      compose  = "${path.module}/../compose/postgres.yaml"
+    worker = {
+      replicas = var.worker_replicas
+      compose  = "${path.module}/compose/worker.yaml"
       images = {
-        PATRONI_IMAGE = var.patroni_image
+        WORKER_IMAGE = var.worker_image
       }
-      secrets = {
-        PATRONI_SUPERUSER_PW   = random_bytes.patroni_superuser_pw.hex
-        PATRONI_REPLICATION_PW = random_bytes.patroni_replication_pw.hex
-      }
+      secrets = {}
       backends = {
-        postgres = {
-          port     = 5432
-          workload = "postgres"
+        worker = {
+          port     = 9090
+          workload = "worker"
           registration = {
-            owner  = "workload"
-            parent = var.cluster_name
+            owner  = "platform"
+            parent = "worker"
           }
-          consul_permissions = {
-            key_prefixes  = ["service/${var.cluster_name}"]
-            session_write = true
-          }
+          consul_permissions = {}
         }
       }
       routes = {
-        "postgres-master" = {
-          backend = "postgres"
-          role    = "master"
-        }
-        "postgres-replica" = {
-          backend = "postgres"
-          role    = "replica"
+        worker = {
+          backend = "worker"
+          role    = null
         }
       }
     }
@@ -314,7 +298,7 @@ locals {
   # replica count, one app id, and one compose hash. A backend is a real
   # local server process hosted by a workload group. A route is a callable
   # mesh name that applications dial; several routes may select one
-  # backend by runtime metadata such as a Patroni role tag.
+  # backend by runtime metadata such as a leader or replica tag.
   backend_declarations = flatten([
     for group in local.workload_group_names : [
       for backend_name, backend in local.workload_groups[group].backends : {
@@ -393,8 +377,8 @@ locals {
   # `members` carries stable per-CVM names the cloud and Terraform both
   # index by. Workload peer IDs carry the group and a group-local ordinal:
   #
-  #   ${cluster}-webdemo-1    -> peer id webdemo-0
-  #   ${cluster}-postgres-1   -> peer id postgres-0
+  #   ${cluster}-api-1      -> peer id api-0
+  #   ${cluster}-worker-1   -> peer id worker-0
   coordinator_members = [for p in local.coordinator_peers : p.slot_name]
   workload_members = {
     for group in local.workload_group_names : group => [
@@ -589,7 +573,7 @@ resource "phala_app" "coordinator" {
   kms            = var.kms
   disk_size      = 20
   storage_fs     = "zfs" # MUST pin (terraform-provider-phala#5)
-  docker_compose = file("${path.module}/../compose/coordinator.yaml")
+  docker_compose = file("${path.module}/compose/coordinator.yaml")
 
   env = local.coordinator_env_by_slot[local.coordinator_members[0]]
 
@@ -721,7 +705,9 @@ output "workload_app_ids" {
   value       = { for group, app in phala_app.workload : group => app.app_id }
 }
 
-output "webdemo_app_id" { value = phala_app.workload["webdemo"].app_id }
+output "api_app_id" { value = phala_app.workload["api"].app_id }
+
+output "worker_app_id" { value = phala_app.workload["worker"].app_id }
 
 output "coordinator_slot_uuids" {
   description = "Map of stable coordinator slot name -> current vm_uuid. The slot name is durable; vm_uuid may change on CVM replacement."
@@ -745,7 +731,7 @@ output "consul_ui" {
   value = "https://${trimprefix(phala_app.coordinator.app_id, "app_")}-8500.${phala_app.coordinator.gateway_base_domain}/ui"
 }
 
-output "webdemo_url" {
-  description = "Public gateway URL for the webdemo workload. Use /hello for one replica and /all to fan out through the mesh."
-  value       = "https://${trimprefix(phala_app.workload["webdemo"].app_id, "app_")}-8080.${phala_app.workload["webdemo"].gateway_base_domain}"
+output "api_url" {
+  description = "Public gateway URL for the starter API workload. Use /hello for the local API response and /worker to call the private worker through the mesh."
+  value       = "https://${trimprefix(phala_app.workload["api"].app_id, "app_")}-8080.${phala_app.workload["api"].gateway_base_domain}"
 }

@@ -67,7 +67,8 @@ docker exec dstack-sidecar-1 sh -c 'curl -s http://127.0.0.1:$(jq -r .ports.patr
 ## Build context
 
 CI builds this image with the repository root as the docker context
-(not `mesh-sidecar/`) so the Dockerfile can `COPY`
-the sibling Go components it embeds: `bootstrap-secrets/`,
-`mesh-conn/`, `admission-broker/`, and `admission-client/`. See
+(not `components/mesh-sidecar/`) so the Dockerfile can `COPY`
+the Go components it embeds from `components/bootstrap-secrets/`,
+`components/mesh-conn/`, `components/admission-broker/`, and
+`components/admission-client/`. See
 `.github/workflows/publish.yml`.

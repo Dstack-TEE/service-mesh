@@ -54,7 +54,7 @@
 # the same service_id. The workload adapter later overwrites that stub
 # in place with dynamic metadata. Patroni does this with
 # register_service:false plus the role-watcher loop in
-# patroni/entrypoint.sh.
+# workloads/patroni/entrypoint.sh.
 #
 # Supervision policy: any one inner process dying takes the whole
 # container down. Compose `restart: on-failure` brings it back in
@@ -208,7 +208,7 @@ CONSUL_ARGS=(
   -hcl='connect { enabled = true }'
   # WORKAROUND: GOSSIP_KEY is generated in Terraform and broadcast
   # to every CVM via env. Attestation-rooted admission will replace
-  # this with TEE-rooted material — see ../docs/design/attestation-admission.md.
+  # this with TEE-rooted material — see docs/design/attestation-admission.md.
   -encrypt="${GOSSIP_KEY:?GOSSIP_KEY required}"
   -log-level=INFO
 )
@@ -422,7 +422,7 @@ if [ "$IS_WORKLOAD" = "1" ]; then
     #     from Patroni REST. We keep `register_service: false` in
     #     patroni.yml so Patroni's own integration stays out of the
     #     service catalog (it only uses Consul as DCS); see
-    #     patroni/entrypoint.sh for the role-watcher.
+    #     workloads/patroni/entrypoint.sh for the role-watcher.
     # Service ID format is `${parent}-${peer}` for both patterns so it
     # never contains a slash. Slashes in service IDs trip up
     # `consul connect envoy -sidecar-for` URL handling.
@@ -592,7 +592,7 @@ HCL
 
     # Default-allow intentions per parent. Tightening this to per-pair
     # allow + default-deny is straightforward but out of scope here;
-    # see ../docs/design/attestation-admission.md for the longer-term shape.
+    # see docs/design/attestation-admission.md for the longer-term shape.
     jq -r '[.[].parent] | unique | .[]' <<<"$MESH_ROUTES_JSON" | while IFS= read -r parent; do
       [ -z "$parent" ] && continue
       CONSUL_HTTP_TOKEN="${CONSUL_MANAGEMENT_TOKEN:-}" consul config write - <<HCL || true

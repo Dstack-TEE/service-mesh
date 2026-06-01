@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented in `cluster-example` in this repo. The live Terraform now
+Implemented in `clusters/patroni-demo` in this repo. The live Terraform now
 defines separate `webdemo` and `postgres` workload groups with separate
 compose files, app IDs, compose hashes, slot sets, global
 `MESH_ROUTES_JSON`, per-group `LOCAL_BACKENDS_JSON`, and a dedicated
@@ -28,13 +28,13 @@ locals {
 }
 ```
 
-`phala_app.worker` used one `compose/worker.yaml`, and
+`phala_app.worker` used one worker compose file, and
 `phala_app_instance.worker[...]` created multiple named slots from that
 same app. As a result:
 
 - every worker ran `webdemo`;
 - every worker ran Patroni/Postgres;
-- every new service added to `compose/worker.yaml` ran on every worker;
+- every new service added to that worker compose file ran on every worker;
 - all worker-hosted backends scaled by changing one `worker_replicas`
   value;
 - admission policy used one worker app compose hash for every service
@@ -83,7 +83,7 @@ locals {
   workload_groups = {
     api = {
       replicas = 3
-      compose  = "${path.module}/../compose/api.yaml"
+      compose  = "${path.module}/compose/api.yaml"
       backends = {
         api = { port = 8080 }
       }
@@ -94,7 +94,7 @@ locals {
 
     queue_worker = {
       replicas = 5
-      compose  = "${path.module}/../compose/queue-worker.yaml"
+      compose  = "${path.module}/compose/queue-worker.yaml"
       backends = {
         queue_worker = { port = 9090 }
       }
@@ -105,7 +105,7 @@ locals {
 
     postgres = {
       replicas = 3
-      compose  = "${path.module}/../compose/postgres.yaml"
+      compose  = "${path.module}/compose/postgres.yaml"
       backends = {
         # One real Postgres server runs in each postgres CVM. Patroni
         # elects its runtime role; Terraform does not assign master or
@@ -395,7 +395,7 @@ Define one workload group:
 workload_groups = {
   postgres = {
     replicas = 3
-    compose  = "${path.module}/../compose/worker.yaml"
+    compose  = "${path.module}/compose/worker.yaml"
     backends = {
       webdemo  = { port = 8080 }
       postgres = { port = 5432, ... }
@@ -416,8 +416,8 @@ resource graph, but it does not yet prove independent service scaling.
 
 Create separate compose files:
 
-- `compose/webdemo.yaml`
-- `compose/postgres.yaml`
+- `clusters/patroni-demo/compose/webdemo.yaml`
+- `clusters/patroni-demo/compose/postgres.yaml`
 
 Then define:
 
@@ -425,7 +425,7 @@ Then define:
 workload_groups = {
   webdemo = {
     replicas = 3
-    compose  = "${path.module}/../compose/webdemo.yaml"
+    compose  = "${path.module}/compose/webdemo.yaml"
     backends = {
       webdemo = { port = 8080 }
     }
@@ -436,7 +436,7 @@ workload_groups = {
 
   postgres = {
     replicas = 3
-    compose  = "${path.module}/../compose/postgres.yaml"
+    compose  = "${path.module}/compose/postgres.yaml"
     backends = {
       postgres = { port = 5432, ... }
     }
@@ -482,8 +482,8 @@ independently.
 
 Local validation:
 
-- `terraform fmt -check cluster-example`
-- `terraform -chdir=cluster-example validate`
+- `terraform fmt -check clusters/patroni-demo`
+- `terraform -chdir=clusters/patroni-demo validate`
 - `git diff --check`
 - Go tests for all modules
 - `STEADY_STATE_OBSERVE_SECONDS=5 go test ./...` in `mesh-conn`

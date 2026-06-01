@@ -1,0 +1,32 @@
+# Copy to terraform.tfvars and fill in.
+#
+# Defaults below deploy one coordinator, one API CVM, and one worker CVM.
+# The sidecar image must be public so Phala Cloud can pull it. The API
+# and worker use a public Python image because their demo programs are
+# inline compose commands.
+
+cluster_name         = "starter"
+coordinator_replicas = 1
+api_replicas         = 1
+worker_replicas      = 1
+
+mesh_sidecar_image = "ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest"
+api_image          = "python:3.12-alpine"
+worker_image       = "python:3.12-alpine"
+
+# Public demo connection-bootstrap endpoint. It is open for first-run
+# testing and does not relay application traffic. Leave
+# external_turn_secret empty unless you are intentionally using a
+# self-hosted relay fallback.
+external_coordinator_host = "155.138.146.255"
+external_signaling_url    = "http://155.138.146.255:7000"
+external_turn_secret      = ""
+
+# Attestation admission is enabled by default. Terraform generates the
+# Consul management token when consul_management_token is empty.
+# enable_attestation_admission = true
+# consul_management_token      = "<optional-consul-acl-management-token>"
+# dstack_verifier_image        = "dstacktee/dstack-verifier:0.5.9" # Pin by digest in production.
+# kms                          = "phala"
+# admission_expected_kms_public_key defaults to the public key for the
+# default phala KMS backend. Override it when changing kms.

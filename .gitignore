@@ -8,17 +8,20 @@ snapshots/
 .env
 
 # Compiled Go binaries
-admission-broker/admission-broker
-admission-client/admission-client
-bootstrap-secrets/bootstrap-secrets
-mesh-conn/mesh-conn
-signaling/signaling
-signaling/icetest
-webdemo/webdemo
+components/admission-broker/admission-broker
+components/admission-client/admission-client
+components/bootstrap-secrets/bootstrap-secrets
+components/mesh-conn/mesh-conn
+components/signaling/signaling
+components/signaling/icetest
+workloads/webdemo/webdemo
 
 # Terraform local state. Keep .terraform.lock.hcl tracked.
-cluster-example/.terraform/
-cluster-example/terraform.tfstate*
-cluster-example/terraform.tfvars
-cluster-example/*.backup
-cluster-example/*.bak
+clusters/*/.terraform/
+clusters/*/terraform.tfstate*
+clusters/*/terraform.tfvars
+clusters/*/*.backup
+clusters/*/*.bak
+
+# Legacy local state after moving the demo cluster to clusters/patroni-demo.
+cluster-example/

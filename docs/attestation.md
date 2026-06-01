@@ -3,7 +3,7 @@
 This example can gate Consul client-agent join and Consul Connect
 service registration on dstack TEE attestation.
 
-Enable it in `cluster-example/terraform.tfvars`:
+Enable it in `clusters/patroni-demo/terraform.tfvars`:
 
 ```hcl
 enable_attestation_admission = true

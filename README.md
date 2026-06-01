@@ -22,7 +22,7 @@ The default deployment is a public web backend plus a private HA
 PostgreSQL service. Every workload CVM must pass attestation admission
 before it receives Consul and Envoy credentials.
 
-![Default demo architecture](assets/demo-architecture.svg)
+![Default demo architecture](docs/assets/demo-architecture.svg)
 
 Applications use stable names such as `webdemo`, `postgres-master`, and
 `postgres-replica`; they do not need to know which CVM is currently
@@ -38,7 +38,7 @@ You need:
 
 ```bash
 git clone https://github.com/Dstack-TEE/service-mesh.git
-cd service-mesh/cluster-example
+cd service-mesh/clusters/patroni-demo
 cp terraform.tfvars.example terraform.tfvars
 export PHALA_CLOUD_API_KEY=phak_...
 terraform init -upgrade
@@ -106,7 +106,7 @@ mesh path. The database is private; it exposes `postgres-master` and
 
 ## Demo Inputs
 
-`cluster-example/terraform.tfvars.example` contains the default demo
+`clusters/patroni-demo/terraform.tfvars.example` contains the default demo
 values. Edit the copied `terraform.tfvars` when you want to change
 replica counts, cluster name, bootstrap endpoint, or image tags.
 
@@ -118,6 +118,39 @@ from your build.
 Public gateway URLs are derived from the Phala Terraform provider's
 `gateway_base_domain` attribute, so this template does not require a
 hardcoded gateway suffix.
+
+## Starter Template
+
+Use `clusters/starter` when you want the smallest custom mesh to copy:
+one public API workload group and one private worker workload group.
+It deliberately has no database and no Patroni role tags.
+
+```bash
+cd service-mesh/clusters/starter
+cp terraform.tfvars.example terraform.tfvars
+export PHALA_CLOUD_API_KEY=phak_...
+terraform init -upgrade
+terraform apply
+
+API=$(terraform output -raw api_url)
+curl "$API/hello"
+curl "$API/worker"
+```
+
+`/hello` returns the API instance identity. `/worker` makes the API call
+`http://worker:9090/hello` through the private mesh.
+
+## Repository Layout
+
+- `clusters/patroni-demo`: full demo cluster, including its Terraform
+  definition and compose files.
+- `clusters/starter`: minimal API + worker cluster template.
+- `components`: reusable platform components built into the sidecar or
+  support images.
+- `workloads`: demo workload images used by the Patroni demo.
+- `support`: helper services that are useful during bootstrap or local
+  operation but are not a cluster definition.
+- `docs`: architecture, operations, and design notes.
 
 ## Default Demo Topology
 
@@ -181,15 +214,15 @@ flowchart LR
   coord -. admits .-> api2
 ```
 
-Declare workload groups, producer backends, and callable routes in
-`cluster-example/cluster.tf`:
+The starter cluster in `clusters/starter/cluster.tf` is a small version
+of this shape:
 
 ```hcl
 locals {
   workload_groups = {
     api = {
       replicas = 2
-      compose  = "${path.module}/../compose/api.yaml"
+      compose  = "${path.module}/compose/api.yaml"
       images   = { API_IMAGE = var.api_image }
       secrets  = {}
       backends = {
@@ -207,7 +240,7 @@ locals {
 
     worker = {
       replicas = 5
-      compose  = "${path.module}/../compose/job-worker.yaml"
+      compose  = "${path.module}/compose/worker.yaml"
       images   = { WORKER_IMAGE = var.worker_image }
       secrets  = {}
       backends = {
@@ -233,7 +266,7 @@ starts an egress Envoy on every workload CVM so calls work even when the
 caller does not host the target backend.
 
 Run each application container in its own group's compose file beside
-the existing `sidecar` service. For example, `compose/api.yaml` would
+the existing `sidecar` service. For example, `clusters/starter/compose/api.yaml` would
 contain:
 
 ```yaml
@@ -251,7 +284,7 @@ services:
         condition: service_healthy
 ```
 
-`compose/job-worker.yaml` would have the same sidecar and a `worker`
+`clusters/starter/compose/worker.yaml` would have the same sidecar and a `worker`
 service that binds `127.0.0.1:9090`.
 
 After deployment, code in either workload group can call:
@@ -274,7 +307,7 @@ For a backend port listed in `workload_groups`, avoid binding `0.0.0.0:<port>`.
 That also captures the local mesh address for the same port. Bind
 `127.0.0.1:<port>` for mesh traffic; if the same service is public
 through the Phala gateway, also bind the host interface address. The
-demo [`webdemo`](webdemo/main.go) shows that dual-bind pattern.
+demo [`webdemo`](workloads/webdemo/main.go) shows that dual-bind pattern.
 
 ## Service Definition Reference
 
@@ -335,7 +368,7 @@ identity `spiffe://<cluster>/api`.
 The shipped backend-plus-database demo uses
 `registration.owner = "workload"` for Postgres because runtime metadata
 belongs to Patroni. The sidecar still creates a Connect-aware stub so
-Envoy can start, but `patroni/entrypoint.sh` updates dynamic metadata
+Envoy can start, but `workloads/patroni/entrypoint.sh` updates dynamic metadata
 such as role tags and health checks. `postgres-master` and
 `postgres-replica` are two routes to one Patroni/Postgres backend:
 
@@ -344,7 +377,7 @@ locals {
   workload_groups = {
     postgres = {
       replicas = var.postgres_replicas
-      compose  = "${path.module}/../compose/postgres.yaml"
+      compose  = "${path.module}/compose/postgres.yaml"
       backends = {
         postgres = {
           port         = 5432
@@ -367,7 +400,7 @@ locals {
 
 Both routes share `backend = "postgres"` and select the same parent
 service, `var.cluster_name`. Patroni uses Consul for leader election,
-and `patroni/entrypoint.sh` runs the role-watcher that publishes the
+and `workloads/patroni/entrypoint.sh` runs the role-watcher that publishes the
 current `master` or `replica` tag. The Consul resolver for each route
 selects the matching tag, so clients keep dialing
 `postgres-master:5432` and `postgres-replica:5432` across failovers.
@@ -416,31 +449,33 @@ design.
 Validate Terraform:
 
 ```bash
-terraform -chdir=cluster-example init -upgrade
-terraform -chdir=cluster-example validate
+terraform -chdir=clusters/patroni-demo init -upgrade
+terraform -chdir=clusters/patroni-demo validate
+terraform -chdir=clusters/starter init -upgrade
+terraform -chdir=clusters/starter validate
 ```
 
 Run local Go tests:
 
 ```bash
-(cd admission-broker && go test ./...)
-(cd signaling && go test ./...)
-(cd webdemo && go test ./...)
+(cd components/admission-broker && go test ./...)
+(cd components/signaling && go test ./...)
+(cd workloads/webdemo && go test ./...)
 ```
 
 Some modules use Go 1.24. Run them through Docker if your host Go is
 older:
 
 ```bash
-docker run --rm -v "$PWD:/src" -w /src/admission-client golang:1.24 go test ./...
-docker run --rm -v "$PWD:/src" -w /src/bootstrap-secrets golang:1.24 go test ./...
-docker run --rm -v "$PWD:/src" -w /src/mesh-conn golang:1.24 go test ./...
+docker run --rm -v "$PWD:/src" -w /src/components/admission-client golang:1.24 go test ./...
+docker run --rm -v "$PWD:/src" -w /src/components/bootstrap-secrets golang:1.24 go test ./...
+docker run --rm -v "$PWD:/src" -w /src/components/mesh-conn golang:1.24 go test ./...
 ```
 
 Build the sidecar image:
 
 ```bash
-docker build -t service-mesh-mesh-sidecar-check -f mesh-sidecar/Dockerfile .
+docker build -t service-mesh-mesh-sidecar-check -f components/mesh-sidecar/Dockerfile .
 ```
 
 ## More Docs

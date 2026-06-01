@@ -1,4 +1,4 @@
-module github.com/Dstack-TEE/service-mesh/admission-client
+module github.com/Dstack-TEE/service-mesh/components/admission-client
 
 go 1.24.0
 

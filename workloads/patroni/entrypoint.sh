@@ -12,7 +12,7 @@
 # Terraform-generated env (PATRONI_SUPERUSER_PW, PATRONI_REPLICATION_PW)
 # broadcast identically to every postgres CVM. Attestation-rooted admission
 # will replace this with TEE-rooted material; see
-# ../docs/design/attestation-admission.md.
+# docs/design/attestation-admission.md.
 
 set -e
 

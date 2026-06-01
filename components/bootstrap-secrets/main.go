@@ -77,7 +77,7 @@ func main() {
 	// so per-CVM derivation can't produce the cluster-wide identical
 	// material those consumers need. They come from Terraform-
 	// generated env instead. See cluster.tf and
-	// ../docs/design/attestation-admission.md for the principled fix.
+	// docs/design/attestation-admission.md for the principled fix.
 	//
 	// What's still derived here is intentionally narrow:
 	//   turn:    handed to mesh-conn for coturn auth (the actual

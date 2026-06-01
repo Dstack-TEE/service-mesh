@@ -16,30 +16,32 @@ Install:
 Validate the Terraform example:
 
 ```bash
-terraform -chdir=cluster-example init -upgrade
-terraform -chdir=cluster-example validate
+terraform -chdir=clusters/patroni-demo init -upgrade
+terraform -chdir=clusters/patroni-demo validate
+terraform -chdir=clusters/starter init -upgrade
+terraform -chdir=clusters/starter validate
 ```
 
 Run local Go tests:
 
 ```bash
-(cd admission-broker && go test ./...)
-(cd signaling && go test ./...)
-(cd webdemo && go test ./...)
+(cd components/admission-broker && go test ./...)
+(cd components/signaling && go test ./...)
+(cd workloads/webdemo && go test ./...)
 ```
 
 Run Go 1.24 module tests through Docker when needed:
 
 ```bash
-docker run --rm -v "$PWD:/src" -w /src/admission-client golang:1.24 go test ./...
-docker run --rm -v "$PWD:/src" -w /src/bootstrap-secrets golang:1.24 go test ./...
-docker run --rm -v "$PWD:/src" -w /src/mesh-conn golang:1.24 go test ./...
+docker run --rm -v "$PWD:/src" -w /src/components/admission-client golang:1.24 go test ./...
+docker run --rm -v "$PWD:/src" -w /src/components/bootstrap-secrets golang:1.24 go test ./...
+docker run --rm -v "$PWD:/src" -w /src/components/mesh-conn golang:1.24 go test ./...
 ```
 
 Build the main sidecar image:
 
 ```bash
-docker build -t service-mesh-mesh-sidecar-check -f mesh-sidecar/Dockerfile .
+docker build -t service-mesh-mesh-sidecar-check -f components/mesh-sidecar/Dockerfile .
 ```
 
 ## Pull Request Expectations

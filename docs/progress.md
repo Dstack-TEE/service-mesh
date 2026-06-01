@@ -46,7 +46,7 @@ deployment model, trust model, or operational status.
 
 ## Open Work
 
-- Rollout driver: `cluster-example/rollout.sh` is paused until it is
+- Rollout driver: `clusters/patroni-demo/rollout.sh` is paused until it is
   updated for the workload-group topology and the provider 0.3
   app-revision fan-out path. Direct Terraform apply is the current
   deployment path; the script's Consul-health scaffolding can be reused

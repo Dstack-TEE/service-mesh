@@ -1,0 +1,136 @@
+# Starter API workload compose template.
+#
+# An API CVM runs the platform sidecar plus one public HTTP API. The API
+# also calls the private worker route through the mesh.
+
+services:
+  sidecar:
+    image: ${MESH_SIDECAR_IMAGE}
+    network_mode: host
+    restart: on-failure
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - ROLE=${WORKLOAD_GROUP}
+      - CLUSTER_NAME=${CLUSTER_NAME}
+      - WORKLOAD_ORDINAL=${WORKLOAD_ORDINAL}
+      - EXPECTED_REPLICAS=${EXPECTED_REPLICAS}
+      - PEERS_JSON=${PEERS_JSON}
+      - MESH_ROUTES_JSON=${MESH_ROUTES_JSON}
+      - LOCAL_BACKENDS_JSON=${LOCAL_BACKENDS_JSON}
+      - COORDINATOR_VIPS=${COORDINATOR_VIPS}
+      - SIGNALING_URL=${SIGNALING_URL}
+      - TURN_HOST=${TURN_HOST}
+      - TURN_SHARED_SECRET=${TURN_SHARED_SECRET}
+      - GOSSIP_KEY=${GOSSIP_KEY}
+      - ADMISSION_BROKER_ENABLE=${ADMISSION_BROKER_ENABLE:-}
+      - MESH_CONN_DEBUG_ICE=${MESH_CONN_DEBUG_ICE:-}
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock:ro
+      - /tmp/dstack-runtime/secrets:/run/secrets
+      - /tmp/dstack-runtime/instance:/run/instance
+      - /tmp/dstack-runtime/mesh:/run/mesh
+      - /tmp/dstack-runtime/consul-tokens:/run/consul-tokens
+      - consul-data:/consul/data
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /run/instance/info.json && test -f /run/mesh/hosts && test -x /run/mesh/exec.sh"]
+      interval: 2s
+      timeout: 1s
+      retries: 60
+      start_period: 5s
+
+  api:
+    image: ${API_IMAGE}
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - PEER_ID=${WORKLOAD_GROUP}-${WORKLOAD_ORDINAL}
+    entrypoint: ["/run/mesh/exec.sh"]
+    command:
+      - python3
+      - -c
+      - |
+        import fcntl
+        import http.server
+        import json
+        import os
+        import socket
+        import socketserver
+        import struct
+        import threading
+        import urllib.request
+
+        NAME = os.environ.get("PEER_ID", "api")
+        PORT = 8080
+
+        class Server(socketserver.ThreadingTCPServer):
+            allow_reuse_address = True
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/hello":
+                    self.write_text(f"hello from {NAME}\n")
+                    return
+                if self.path == "/worker":
+                    with urllib.request.urlopen("http://worker:9090/hello", timeout=5) as resp:
+                        worker = resp.read().decode().strip()
+                    self.write_json({"from": NAME, "worker": worker})
+                    return
+                self.send_error(404)
+
+            def log_message(self, fmt, *args):
+                print(f"{self.client_address[0]} - {fmt % args}", flush=True)
+
+            def write_text(self, body):
+                data = body.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def write_json(self, body):
+                data = (json.dumps(body) + "\n").encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        def interface_addresses():
+            addrs = []
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                for _, name in socket.if_nameindex():
+                    if name == "lo":
+                        continue
+                    ifreq = struct.pack("256s", name[:15].encode())
+                    try:
+                        data = fcntl.ioctl(sock.fileno(), 0x8915, ifreq)
+                    except OSError:
+                        continue
+                    addr = socket.inet_ntoa(data[20:24])
+                    if not addr.startswith("127."):
+                        addrs.append(addr)
+            return addrs
+
+        addrs = ["127.0.0.1"]
+        for addr in interface_addresses():
+            if addr not in addrs:
+                addrs.append(addr)
+
+        servers = []
+        for addr in addrs:
+            server = Server((addr, PORT), Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            servers.append(server)
+            print(f"api: {NAME} listening on {addr}:{PORT}", flush=True)
+
+        threading.Event().wait()
+    volumes:
+      - /tmp/dstack-runtime/mesh:/run/mesh:ro
+    depends_on:
+      sidecar:
+        condition: service_healthy
+
+volumes:
+  consul-data:

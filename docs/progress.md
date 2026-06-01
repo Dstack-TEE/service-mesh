@@ -71,6 +71,16 @@ deployment model, trust model, or operational status.
   Consul node namespace, but bind it to a platform-stable instance
   identifier when Phala exposes one without creating a deployment
   cycle.
+- Parallel deploys blocked on KMS nonce race: concurrent app creation
+  (two `terraform apply`s, or one apply with `-parallelism > 1`) fails
+  with `[ERR-02-009] ... unique constraint "ix_dstack_app_nonces_address"`
+  because the KMS `obtain_app_id` allocates the per-team-wallet nonce
+  with an unlocked read-modify-write. Verified on provider
+  0.3.0-beta.4. Use `-parallelism=1` and one apply at a time until the
+  upstream fix lands (route `obtain_app_id` through the existing
+  `.with_for_update()` path): Phala-Network/phala-cloud-monorepo#1544.
+  The provider exposes `custom_app_id` + `nonce` for manual
+  pre-allocation, but that can't cover two separate concurrent applies.
 
 ## Decisions
 

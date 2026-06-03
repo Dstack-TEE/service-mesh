@@ -67,7 +67,8 @@ services:
       - MESH_CONN_DEBUG_ICE=${MESH_CONN_DEBUG_ICE:-}
       - ADMISSION_BROKER_ENABLE=${ADMISSION_BROKER_ENABLE:-}
       - ADMISSION_POLICY_JSON=${ADMISSION_POLICY_JSON:-}
-      - CONSUL_MANAGEMENT_TOKEN=${CONSUL_MANAGEMENT_TOKEN:-}
+      # Consul ACL management token is NOT injected here — bootstrap-secrets
+      # derives it in-TEE and writes /run/secrets/consul-management-token.
       - DSTACK_VERIFIER_URL=${DSTACK_VERIFIER_URL:-http://127.0.0.1:8080/verify}
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock:ro

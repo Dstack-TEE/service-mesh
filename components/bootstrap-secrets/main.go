@@ -108,6 +108,36 @@ func main() {
 			d.name, len(keyBytes), d.format, d.name)
 	}
 
+	// 2b. Coordinator-only: derive the Consul ACL management token in-TEE.
+	//
+	// The management token is the ACL root — it mints every scoped token
+	// the admission broker issues. It must be byte-identical across all
+	// coordinators. In the v0.3 named-slot (MIG) model every coordinator
+	// is a member of ONE phala_app, so they share an app_id and GetKey()
+	// returns the same bytes on every coordinator. That makes it a
+	// role-local secret we can root in the TEE instead of generating it
+	// in Terraform and shipping it through plaintext state + env.
+	//
+	// Only coordinators derive it, and only when admission is enabled
+	// (otherwise there is no ACL system to manage). Workloads never hold
+	// the management token; they get attested, scoped tokens from the
+	// broker. The derived value is hex (matches the prior token format
+	// Consul accepts as initial_management).
+	if cfg.Role == "coordinator" && os.Getenv("ADMISSION_BROKER_ENABLE") == "1" {
+		seed, err := client.GetKey(ctx, "dstack-mesh/consul-management", cfg.ClusterName, "secp256k1")
+		if err != nil {
+			log.Fatalf("GetKey consul-management: %v", err)
+		}
+		keyBytes, err := seed.DecodeKey()
+		if err != nil {
+			log.Fatalf("decode consul-management: %v", err)
+		}
+		if err := writeSecretEncoded("/run/secrets/consul-management-token", keyBytes, "hex"); err != nil {
+			log.Fatalf("write consul-management-token: %v", err)
+		}
+		log.Printf("derived consul management token (%d bytes, hex) -> /run/secrets/consul-management-token", len(keyBytes))
+	}
+
 	// 3. Ordinal selection.
 	//    Three sources, in order of preference:
 	//      a. WORKLOAD_ORDINAL, WORKER_ORDINAL, or COORDINATOR_ORDINAL

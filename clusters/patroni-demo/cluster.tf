@@ -45,19 +45,23 @@ provider "phala" {}
 # `app_id` and each workload group app has its own `app_id`, so within
 # a role `dstack.GetKey()` now returns the same bytes on every peer. That
 # unlocks in-TEE derivation for role-local secrets in a future change.
-# However the secrets here are CROSS-ROLE (coordinators AND workload
-# apps need the same gossip_key, etc.), and the coordinator and workload
-# apps have different `app_id`s, so cross-role derivation still
-# needs an external source. The terraform-generated random_bytes
-# below remain the temporary workaround until attestation-rooted secret
-# generation and distribution lands.
+# The secrets here are CROSS-ROLE (coordinators AND workload apps need
+# the same gossip_key, etc.), and the coordinator and workload apps have
+# different `app_id`s, so cross-role derivation still needs an external
+# source. The terraform-generated random_bytes below remain the temporary
+# workaround until attestation-rooted secret generation and distribution
+# lands.
 #
 # Trade-off accepted: anyone with read access to terraform.tfstate
-# (or the apply host's memory) sees plaintext keys.
+# (or the apply host's memory) sees these plaintext keys.
 #
-# Connect CA root is NOT in this list — Consul's built-in CA provider
-# generates the root in Raft on first quorum, no external derivation
-# required and no per-CVM problem.
+# NOT in this list (rooted in the TEE instead):
+#   - Consul ACL management token — it is ROLE-LOCAL to the coordinators,
+#     which share one app_id, so bootstrap-secrets derives it in-TEE via
+#     GetKey (identical on every coordinator). It is never generated here
+#     and never present in tfstate. See components/bootstrap-secrets.
+#   - Connect CA root — Consul's built-in CA generates it in Raft on first
+#     quorum; no external derivation and no per-CVM problem.
 resource "random_bytes" "gossip_key" {
   length = 32
 }
@@ -65,9 +69,6 @@ resource "random_bytes" "patroni_superuser_pw" {
   length = 32
 }
 resource "random_bytes" "patroni_replication_pw" {
-  length = 32
-}
-resource "random_bytes" "consul_management_token" {
   length = 32
 }
 
@@ -168,13 +169,6 @@ variable "enable_attestation_admission" {
   description = "Start the coordinator admission broker and require attested workload CVMs before issuing Consul node and service tokens."
 }
 
-variable "consul_management_token" {
-  type        = string
-  default     = ""
-  sensitive   = true
-  description = "Optional Consul management ACL token used by admission-broker to mint scoped tokens. When empty, Terraform generates one."
-}
-
 variable "admission_expected_kms_public_key" {
   type        = string
   default     = "3059301306072a8648ce3d020106082a8648ce3d030107034200048844eb42ccdf8c52fd4f174f362fcb9bbd19c45fd48f1edec2d8f1ca23536ec1a74021b4cee610c074f8294d431b2b7fee2c39e5333fdaf0a4522d43fb159d9f"
@@ -194,11 +188,6 @@ variable "admission_expected_kms_public_key" {
 
 locals {
   launch_os_image = trimspace(var.os_image) == "" ? null : trimspace(var.os_image)
-  effective_consul_management_token = (
-    trimspace(var.consul_management_token) != ""
-    ? var.consul_management_token
-    : random_bytes.consul_management_token.hex
-  )
 
   mesh_service_default_permissions = {
     service_names      = []
@@ -436,8 +425,7 @@ locals {
       # value is not measured. Keep preflight acyclic by hashing with
       # the same key present and an empty value; the deployed resource
       # receives the generated policy JSON below.
-      ADMISSION_POLICY_JSON   = ""
-      CONSUL_MANAGEMENT_TOKEN = ""
+      ADMISSION_POLICY_JSON = ""
     }
   }
 
@@ -542,8 +530,7 @@ locals {
 
   coordinator_env_by_slot = {
     for slot_name, env in local.coordinator_preflight_env : slot_name => merge(env, {
-      ADMISSION_POLICY_JSON   = local.admission_policy_json
-      CONSUL_MANAGEMENT_TOKEN = local.effective_consul_management_token
+      ADMISSION_POLICY_JSON = local.admission_policy_json
     })
   }
 

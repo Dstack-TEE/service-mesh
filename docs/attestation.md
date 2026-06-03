@@ -7,12 +7,17 @@ Enable it in `clusters/patroni-demo/terraform.tfvars`:
 
 ```hcl
 enable_attestation_admission = true
-consul_management_token      = "<consul-acl-management-token>"
 dstack_verifier_image        = "dstacktee/dstack-verifier:0.5.9"
 kms                          = "phala"
 # admission_expected_kms_public_key defaults to the public key for the
 # default phala KMS backend. Override it when changing kms.
 ```
+
+The Consul ACL management token is not a Terraform input. The
+coordinators share one `app_id`, so `bootstrap-secrets` derives it
+in-TEE via `GetKey` (identical on every coordinator) and writes it to
+`/run/secrets/consul-management-token`. It never appears in
+`terraform.tfstate` or on the deploy host.
 
 Use a versioned verifier tag and pin it by digest for production.
 Do not rely on `dstacktee/dstack-verifier:latest`; the current
@@ -144,14 +149,14 @@ From a coordinator CVM, inspect Consul membership:
 
 ```sh
 docker exec dstack-sidecar-1 sh -lc \
-  'CONSUL_HTTP_ADDR=http://127.0.0.1:8500 consul members -token "$CONSUL_MANAGEMENT_TOKEN"'
+  'CONSUL_HTTP_ADDR=http://127.0.0.1:8500 consul members -token "$(cat /run/secrets/consul-management-token)"'
 ```
 
 Check Raft health:
 
 ```sh
 docker exec dstack-sidecar-1 sh -lc \
-  'CONSUL_HTTP_ADDR=http://127.0.0.1:8500 consul operator raft list-peers -token "$CONSUL_MANAGEMENT_TOKEN"'
+  'CONSUL_HTTP_ADDR=http://127.0.0.1:8500 consul operator raft list-peers -token "$(cat /run/secrets/consul-management-token)"'
 ```
 
 Look for successful node and service admission in worker sidecar logs:

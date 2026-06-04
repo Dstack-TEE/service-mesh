@@ -41,6 +41,15 @@ them via environment variables. This is a known workaround because the
 values live in Terraform state and are visible to whoever runs
 `terraform apply`.
 
+Precedent — the Consul ACL management token used to be on this list but
+is now derived in-TEE: it is *role-local* to the coordinators, which
+share one `app_id`, so `bootstrap-secrets` derives it via `GetKey`
+(identical on every coordinator) and it never enters Terraform state.
+See `../attestation.md`. The three secrets above are harder because they
+are *cross-role* — consumers under different `app_id`s need
+byte-identical values, so `GetKey` alone cannot produce them; they need
+attested generation plus distribution, not just derivation.
+
 Future work:
 
 - Generate non-NAT cluster secrets inside an attested coordinator.

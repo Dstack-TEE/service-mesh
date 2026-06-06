@@ -27,6 +27,10 @@ services:
       - GOSSIP_KEY=${GOSSIP_KEY}
       - ADMISSION_BROKER_ENABLE=${ADMISSION_BROKER_ENABLE:-}
       - MESH_CONN_DEBUG_ICE=${MESH_CONN_DEBUG_ICE:-}
+      # Tell bootstrap-secrets to derive Patroni's superuser + replication
+      # passwords in-TEE and write them to /run/secrets (this CVM's app_id
+      # is shared across postgres replicas, so the bytes are identical).
+      - DERIVE_PATRONI_PASSWORDS=${DERIVE_PATRONI_PASSWORDS:-}
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock:ro
       - /tmp/dstack-runtime/secrets:/run/secrets
@@ -47,8 +51,9 @@ services:
     restart: on-failure
     environment:
       - CLUSTER_NAME=${CLUSTER_NAME}
-      - PATRONI_SUPERUSER_PW=${PATRONI_SUPERUSER_PW}
-      - PATRONI_REPLICATION_PW=${PATRONI_REPLICATION_PW}
+      # Superuser + replication passwords are NOT injected here — they are
+      # derived in-TEE by bootstrap-secrets and read from /run/secrets by
+      # the entrypoint (mounted ro below).
       - ADMISSION_BROKER_ENABLE=${ADMISSION_BROKER_ENABLE:-}
       - LOCAL_BACKENDS_JSON=${LOCAL_BACKENDS_JSON}
       - PEERS_JSON=${PEERS_JSON}

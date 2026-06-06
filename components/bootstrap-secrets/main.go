@@ -70,12 +70,17 @@ func main() {
 
 	// 2. Derive per-app secrets via dstack KMS.
 	//
-	// WORKAROUND scope note: gossip key, Patroni superuser password,
-	// and Patroni replication password are NOT derived here — they
-	// would be different bytes on every CVM (each CVM is its own
-	// phala_app with its own app_id, and GetKey is rooted at app_id),
-	// so per-CVM derivation can't produce the cluster-wide identical
-	// material those consumers need. They come from Terraform-
+	// What's derived in-TEE is role-local material: secrets whose
+	// consumers all share one app_id, so GetKey (rooted at app_id)
+	// yields identical bytes across the app's replicas. The Consul
+	// management token (coordinators, 2b) and the Patroni passwords
+	// (postgres, 2c) are derived this way, plus the always-on turn/
+	// ca-seed below.
+	//
+	// WORKAROUND scope note: the gossip key is NOT derived here. It is
+	// CROSS-ROLE (coordinators AND workload apps need byte-identical
+	// bytes), and those apps have different app_ids, so GetKey cannot
+	// produce the same value for all of them. It comes from Terraform-
 	// generated env instead. See cluster.tf and
 	// docs/design/attestation-admission.md for the principled fix.
 	//
@@ -136,6 +141,35 @@ func main() {
 			log.Fatalf("write consul-management-token: %v", err)
 		}
 		log.Printf("derived consul management token (%d bytes, hex) -> /run/secrets/consul-management-token", len(keyBytes))
+	}
+
+	// 2c. Postgres-only: derive Patroni's superuser + replication
+	// passwords in-TEE. Like the management token these are role-local:
+	// every postgres replica is a member of one phala_app, so GetKey
+	// yields identical bytes across replicas and the passwords never
+	// enter Terraform state. The postgres workload requests them with
+	// DERIVE_PATRONI_PASSWORDS=1 (the patroni container has no dstack
+	// socket of its own, so the sidecar derives and hands them over via
+	// /run/secrets). hex-encoded, matching the prior token format.
+	if os.Getenv("DERIVE_PATRONI_PASSWORDS") == "1" {
+		patroniSecrets := []struct{ name, path string }{
+			{"patroni-superuser", "dstack-mesh/patroni-superuser"},
+			{"patroni-replication", "dstack-mesh/patroni-replication"},
+		}
+		for _, s := range patroniSecrets {
+			seed, err := client.GetKey(ctx, s.path, cfg.ClusterName, "secp256k1")
+			if err != nil {
+				log.Fatalf("GetKey %s: %v", s.path, err)
+			}
+			keyBytes, err := seed.DecodeKey()
+			if err != nil {
+				log.Fatalf("decode %s: %v", s.path, err)
+			}
+			if err := writeSecretEncoded("/run/secrets/"+s.name, keyBytes, "hex"); err != nil {
+				log.Fatalf("write %s: %v", s.name, err)
+			}
+			log.Printf("derived %s (%d bytes, hex) -> /run/secrets/%s", s.name, len(keyBytes), s.name)
+		}
 	}
 
 	// 3. Ordinal selection.

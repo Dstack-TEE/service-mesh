@@ -51,14 +51,14 @@ deployment model, trust model, or operational status.
   app-revision fan-out path. Direct Terraform apply is the current
   deployment path; the script's Consul-health scaffolding can be reused
   for a future workload-aware drain-and-roll workflow.
-- Secret lifecycle: the Consul ACL management token is now derived
-  in-TEE on the coordinators (role-local; coordinators share one
-  app_id, so bootstrap-secrets `GetKey` yields identical bytes) and
-  never appears in tfstate — verified on real cloud. Remaining: the
-  cross-role secrets (gossip key, Patroni superuser/replication
-  passwords) still come from Terraform env because consumers across
-  different app_ids need byte-identical values; moving these needs
-  TEE-rooted generation + attested distribution.
+- Secret lifecycle: role-local secrets are now derived in-TEE by
+  bootstrap-secrets (consumers share one app_id, so `GetKey` yields
+  identical bytes) and never appear in tfstate — the Consul ACL
+  management token (coordinators) and the Patroni superuser/replication
+  passwords (postgres), both verified on real cloud. Remaining: only the
+  gossip key, which is cross-role (coordinators AND workload apps need
+  byte-identical bytes under different app_ids), so it needs TEE-rooted
+  generation + attested distribution, not just derivation.
 - Long soak: run the real cluster for at least one hour with zero ACL
   authorization failures, zero attestation rejections, and stable
   Patroni leader/replica health.

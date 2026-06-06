@@ -36,39 +36,32 @@ provider "phala" {}
 
 # ---------- Cluster-wide shared secrets (WORKAROUND) ----------
 #
-# These three secrets MUST be byte-identical across every CVM that
-# joins the cluster (gossip auth, Patroni replication, Patroni superuser).
-# The principled answer is "derive them in the TEE, never let a human
-# touch them" — see ../../docs/design/attestation-admission.md.
+# The gossip key MUST be byte-identical across every CVM that joins the
+# cluster (gossip auth). The principled answer is "derive it in the TEE,
+# never let a human touch it" — see ../../docs/design/attestation-admission.md.
 #
 # Migration note: in the v0.3 MIG model, all coordinators share ONE
 # `app_id` and each workload group app has its own `app_id`, so within
 # a role `dstack.GetKey()` now returns the same bytes on every peer. That
-# unlocks in-TEE derivation for role-local secrets in a future change.
-# The secrets here are CROSS-ROLE (coordinators AND workload apps need
-# the same gossip_key, etc.), and the coordinator and workload apps have
-# different `app_id`s, so cross-role derivation still needs an external
-# source. The terraform-generated random_bytes below remain the temporary
-# workaround until attestation-rooted secret generation and distribution
-# lands.
+# is enough for ROLE-LOCAL secrets (see the TEE-rooted list below). The
+# gossip key is CROSS-ROLE, though — coordinators AND workload apps need
+# the same value, and they have different `app_id`s, so GetKey cannot
+# produce it for all of them. The terraform-generated random_bytes below
+# remains the temporary workaround until attestation-rooted cross-role
+# secret generation and distribution lands.
 #
 # Trade-off accepted: anyone with read access to terraform.tfstate
-# (or the apply host's memory) sees these plaintext keys.
+# (or the apply host's memory) sees this plaintext key.
 #
 # NOT in this list (rooted in the TEE instead):
-#   - Consul ACL management token — it is ROLE-LOCAL to the coordinators,
-#     which share one app_id, so bootstrap-secrets derives it in-TEE via
-#     GetKey (identical on every coordinator). It is never generated here
-#     and never present in tfstate. See components/bootstrap-secrets.
+#   - Consul ACL management token — role-local to the coordinators (one
+#     app_id), derived in-TEE by bootstrap-secrets.
+#   - Patroni superuser + replication passwords — role-local to the
+#     postgres app (one app_id across replicas), derived in-TEE by
+#     bootstrap-secrets when DERIVE_PATRONI_PASSWORDS=1. Never in tfstate.
 #   - Connect CA root — Consul's built-in CA generates it in Raft on first
 #     quorum; no external derivation and no per-CVM problem.
 resource "random_bytes" "gossip_key" {
-  length = 32
-}
-resource "random_bytes" "patroni_superuser_pw" {
-  length = 32
-}
-resource "random_bytes" "patroni_replication_pw" {
   length = 32
 }
 
@@ -230,9 +223,11 @@ locals {
       images = {
         PATRONI_IMAGE = var.patroni_image
       }
+      # Superuser + replication passwords are derived in-TEE by
+      # bootstrap-secrets (postgres replicas share one app_id). This flag
+      # turns that on; the values never touch Terraform or state.
       secrets = {
-        PATRONI_SUPERUSER_PW   = random_bytes.patroni_superuser_pw.hex
-        PATRONI_REPLICATION_PW = random_bytes.patroni_replication_pw.hex
+        DERIVE_PATRONI_PASSWORDS = "1"
       }
       backends = {
         postgres = {

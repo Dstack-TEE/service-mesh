@@ -319,11 +319,14 @@ depth.
 - **Gossip key wired in (workaround)** — `cluster.tf`
   generates a `random_bytes` and broadcasts it to every CVM via
   env; `components/mesh-sidecar/entrypoint.sh` passes it as
-  `consul agent -encrypt=…`. Same shape used for the Patroni
-  superuser + replication passwords. The keys live in
-  `terraform.tfstate`; eliminating that exposure is part of the
+  `consul agent -encrypt=…`. It lives in `terraform.tfstate`
+  because it is cross-role (different `app_id`s need identical
+  bytes); eliminating that exposure is part of the
   attestation-admission work
-  (`design/attestation-admission.md`).
+  (`design/attestation-admission.md`). The role-local secrets that
+  once used this shape — the Consul management token and the Patroni
+  superuser + replication passwords — are now derived in-TEE by
+  `bootstrap-secrets` and no longer touch state.
 
 ## Cross-layer concerns
 

@@ -35,27 +35,29 @@ Future work:
 
 ### Non-NAT Secret Distribution
 
-The cluster still generates the gossip key, Patroni superuser
-password, and Patroni replication password in Terraform and distributes
-them via environment variables. This is a known workaround because the
-values live in Terraform state and are visible to whoever runs
-`terraform apply`.
+The cluster still generates the **gossip key** in Terraform and
+distributes it via an environment variable. This is a known workaround
+because the value lives in Terraform state and is visible to whoever
+runs `terraform apply`.
 
-Precedent — the Consul ACL management token used to be on this list but
-is now derived in-TEE: it is *role-local* to the coordinators, which
-share one `app_id`, so `bootstrap-secrets` derives it via `GetKey`
-(identical on every coordinator) and it never enters Terraform state.
-See `../attestation.md`. The three secrets above are harder because they
-are *cross-role* — consumers under different `app_id`s need
-byte-identical values, so `GetKey` alone cannot produce them; they need
-attested generation plus distribution, not just derivation.
+Precedent — the role-local secrets that used to be on this list are now
+derived in-TEE by `bootstrap-secrets` and never enter Terraform state:
+the Consul ACL management token (coordinators, one `app_id`) and the
+Patroni superuser + replication passwords (postgres replicas, one
+`app_id`). Each consumer set shares an `app_id`, so `GetKey` yields
+identical bytes across the app's CVMs. See `../attestation.md`.
+
+The gossip key is harder because it is *cross-role* — coordinators AND
+workload apps need byte-identical values but have different `app_id`s,
+so `GetKey` alone cannot produce it; it needs attested generation plus
+distribution, not just derivation.
 
 Future work:
 
-- Generate non-NAT cluster secrets inside an attested coordinator.
-- Store them in Consul KV after CAS on an initialization key.
+- Generate the cross-role gossip key inside an attested coordinator.
+- Store it in Consul KV after CAS on an initialization key.
 - Gate reads on attestation-issued Consul tokens.
-- Remove the Terraform `random_bytes` resources for those secrets.
+- Remove the Terraform `random_bytes.gossip_key` resource.
 
 The TURN shared secret is separate. It is the NAT traversal admission
 key for the current VPC-like overlay model and may remain

@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="600" viewBox="0 0 1440 600" role="img" aria-labelledby="title desc">
+  <title id="title">Starter service-mesh architecture</title>
+  <desc id="desc">User traffic reaches the API workload group through the Phala gateway. The API calls worker:9090 across the private mesh, where each workload group runs Envoy and Consul sidecars whose Consul agents gossip with each other. Coordinator CVMs admit each CVM and then issue its Consul and Envoy credentials.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto">
+      <path d="M 1 1 L 11 6 L 1 11 Z" fill="#f8fafc"/>
+    </marker>
+    <marker id="arrow-mesh" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 1 1 L 11 6 L 1 11 Z" fill="#34d399"/>
+    </marker>
+    <marker id="arrow-muted" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 1 1 L 11 6 L 1 11 Z" fill="#cbd5e1"/>
+    </marker>
+    <style>
+      .bg { fill: #080c11; }
+      .column { fill: #0d1117; stroke: #a8b0bd; stroke-width: 4; }
+      .box { fill: #1f2937; stroke: #64748b; stroke-width: 1.5; }
+      .app { fill: #102033; stroke: #60a5fa; stroke-width: 1.8; }
+      .envoy { fill: #11251e; stroke: #34d399; stroke-width: 1.8; }
+      .consul { fill: #211d2d; stroke: #c4b5fd; stroke-width: 1.8; }
+      .mesh-band { fill: #1e293b; opacity: 0.82; }
+      .line { fill: none; stroke: #f8fafc; stroke-width: 3; marker-end: url(#arrow); }
+      .mesh-line { fill: none; stroke: #34d399; stroke-width: 2.7; stroke-dasharray: 8 8; marker-end: url(#arrow-mesh); }
+      .admit-line { fill: none; stroke: #cbd5e1; stroke-width: 2.5; stroke-dasharray: 8 8; marker-end: url(#arrow-muted); }
+      .gossip-line { fill: none; stroke: #c4b5fd; stroke-width: 2.5; stroke-dasharray: 7 7; }
+      .text { fill: #f8fafc; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .muted { fill: #cbd5e1; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .label { font-size: 29px; font-weight: 750; }
+      .medium { font-size: 22px; font-weight: 650; }
+      .small { font-size: 18px; }
+      .route { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 19px; font-weight: 750; }
+      .user-icon { fill: none; stroke: #f8fafc; stroke-width: 3; stroke-linecap: round; }
+      .check { fill: #10b981; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1440" height="600"/>
+  <rect class="mesh-band" x="600" y="324" width="236" height="72"/>
+  <rect class="mesh-band" x="600" y="440" width="236" height="72"/>
+
+  <g transform="translate(84 96)">
+    <rect class="box" x="0" y="0" width="112" height="112" rx="7"/>
+    <circle class="user-icon" cx="56" cy="37" r="13"/>
+    <path class="user-icon" d="M 30 78 C 30 59 82 59 82 78"/>
+    <text class="text label" x="56" y="158" text-anchor="middle">User</text>
+  </g>
+
+  <g transform="translate(392 72)">
+    <rect class="column" x="0" y="0" width="220" height="460" rx="7"/>
+    <rect class="app" x="36" y="44" width="148" height="72" rx="7"/>
+    <text class="text medium" x="110" y="80" text-anchor="middle">api</text>
+    <text class="muted small" x="110" y="104" text-anchor="middle">container</text>
+    <circle class="check" cx="184" cy="80" r="17"/>
+    <path d="M 175 80 L 182 88 L 196 71" fill="none" stroke="#f8fafc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text class="text label" x="110" y="180" text-anchor="middle">api</text>
+    <text class="muted small" x="110" y="208" text-anchor="middle">workload group</text>
+
+    <rect class="envoy" x="60" y="252" width="100" height="72" rx="7"/>
+    <text class="text medium" x="110" y="296" text-anchor="middle">Envoy</text>
+
+    <rect class="consul" x="60" y="368" width="100" height="72" rx="7"/>
+    <text class="text medium" x="110" y="412" text-anchor="middle">Consul</text>
+  </g>
+
+  <g transform="translate(824 72)">
+    <rect class="column" x="0" y="0" width="220" height="460" rx="7"/>
+    <rect class="app" x="36" y="44" width="148" height="72" rx="7"/>
+    <text class="text medium" x="110" y="80" text-anchor="middle">worker</text>
+    <text class="muted small" x="110" y="104" text-anchor="middle">container</text>
+    <circle class="check" cx="184" cy="80" r="17"/>
+    <path d="M 175 80 L 182 88 L 196 71" fill="none" stroke="#f8fafc" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text class="text label" x="110" y="180" text-anchor="middle">worker</text>
+    <text class="muted small" x="110" y="208" text-anchor="middle">workload group</text>
+
+    <rect class="envoy" x="60" y="252" width="100" height="72" rx="7"/>
+    <text class="text medium" x="110" y="296" text-anchor="middle">Envoy</text>
+
+    <rect class="consul" x="60" y="368" width="100" height="72" rx="7"/>
+    <text class="text medium" x="110" y="412" text-anchor="middle">Consul</text>
+  </g>
+
+  <g transform="translate(1164 298)">
+    <rect class="column" x="0" y="0" width="210" height="248" rx="7"/>
+    <text class="text label" x="105" y="48" text-anchor="middle">Coordinator</text>
+    <rect class="box" x="26" y="76" width="158" height="38" rx="5"/>
+    <text class="text small" x="105" y="101" text-anchor="middle">admission broker</text>
+    <rect class="box" x="26" y="130" width="158" height="38" rx="5"/>
+    <text class="text small" x="105" y="155" text-anchor="middle">dstack verifier</text>
+    <rect class="box" x="26" y="184" width="158" height="38" rx="5"/>
+    <text class="text small" x="105" y="209" text-anchor="middle">Consul servers</text>
+  </g>
+
+  <path class="line" d="M 196 152 H 392"/>
+  <text class="text route" x="294" y="120" text-anchor="middle">Phala gateway</text>
+  <text class="text route" x="294" y="146" text-anchor="middle">public HTTPS</text>
+  <text class="text route" x="294" y="190" text-anchor="middle">api:8080</text>
+
+  <path class="line" d="M 612 152 H 824"/>
+  <text class="text route" x="718" y="120" text-anchor="middle">worker:9090</text>
+
+  <path class="mesh-line" d="M 552 360 H 884"/>
+  <text class="text route" x="718" y="386" text-anchor="middle">private mesh</text>
+
+  <path class="gossip-line" d="M 552 476 H 884"/>
+  <text class="text route" x="718" y="502" text-anchor="middle">gossip</text>
+
+  <path class="admit-line" d="M 1164 360 H 1044"/>
+  <path class="admit-line" d="M 1164 484 H 1044"/>
+  <text class="muted small" x="1104" y="338" text-anchor="middle">admission</text>
+</svg>

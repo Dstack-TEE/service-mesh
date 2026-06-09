@@ -2,170 +2,44 @@
 
 Build an attested cluster, not just one attested VM.
 
-If you can already deploy one dstack Confidential VM (CVM) on Phala
-Cloud, the next question is: how do you run a real application made of
-several CVMs, while still knowing that every machine belongs to the
-deployment?
+`service-mesh` is a Terraform template for multi-CVM applications on
+Phala Cloud. Each dstack Confidential VM (CVM) proves attestation
+evidence before it receives private service credentials. After
+admission, workloads call each other by stable service names such as
+`webdemo`, `postgres-master`, or `worker`.
 
-This repository is a working template for that problem. It deploys a
-multi-CVM application where each node must prove its attestation
-evidence before it receives credentials to join the service layer. Once
-admitted, workloads call each other by normal service names.
+The default deployment runs a public web backend and private HA
+PostgreSQL. Use it to learn the full flow. Then replace the demo
+workload with your own services.
 
-The demo application is HA PostgreSQL plus a small web backend. The
-pattern is the important part: define the cluster, deploy it, verify the
-running services, then replace the demo workload with your own.
+## When To Use This
 
-## What You Get
+Use this repository when:
 
-The default deployment is a public web backend plus a private HA
-PostgreSQL service. Every workload CVM must pass attestation admission
-before it receives Consul and Envoy credentials.
+- you can deploy dstack CVMs on Phala Cloud,
+- you need several CVMs in one attested deployment,
+- workloads should receive Consul and Envoy credentials only after
+  attestation admission,
+- application code should call private services by stable names.
 
-![Default demo architecture](docs/assets/demo-architecture.svg)
+This is not a Kubernetes service mesh. It is a Phala Cloud and dstack
+template. It uses Terraform, Consul, Envoy, dstack attestation, and a
+peer transport to run a private service layer across CVMs.
 
-Applications use stable names such as `webdemo`, `postgres-master`, and
-`postgres-replica`; they do not need to know which CVM is currently
-serving each route.
+## What The HA Postgres Demo Deploys
 
-## Try The Demo
+The HA Postgres demo deploys:
 
-You need:
+- coordinator CVMs that run Consul servers and the admission broker,
+- a public `webdemo` workload group,
+- a private Patroni/PostgreSQL workload group,
+- Consul and Envoy credentials that are issued after attestation
+  admission,
+- stable mesh names for app-to-app and app-to-database calls.
 
-- a Phala Cloud account,
-- a Phala Cloud API key,
-- Terraform.
+![HA Postgres demo architecture](docs/assets/demo-architecture.svg)
 
-```bash
-git clone https://github.com/Dstack-TEE/service-mesh.git
-cd service-mesh/clusters/patroni-demo
-cp terraform.tfvars.example terraform.tfvars
-export PHALA_CLOUD_API_KEY=phak_...
-terraform init -upgrade
-terraform apply
-```
-
-Every node is admitted through attestation before it receives service
-credentials.
-
-## Verify It Works
-
-After deployment, Terraform prints `webdemo_url`. Use it from your
-laptop:
-
-```bash
-WEB=$(terraform output -raw webdemo_url)
-echo "$WEB"
-curl "$WEB/hello"
-```
-
-The URL is built from provider state and has the same shape as other
-Phala gateway URLs:
-
-```text
-https://<webdemo-app-id>-8080.dstack-pha-prod5.phala.network
-```
-
-`/hello` should return one webdemo workload identity:
-
-```text
-hello from webdemo-0
-```
-
-Now ask that service to call other demo instances through the private
-cluster network:
-
-```bash
-curl "$WEB/all"
-```
-
-The response is JSON. The exact workload names can differ, but the shape
-should look like this:
-
-```json
-{
-  "from": "webdemo-0",
-  "results": {
-    "hello from webdemo-0": 4,
-    "hello from webdemo-1": 4
-  },
-  "samples": 8
-}
-```
-
-Seeing more than one workload in `results` proves the important path:
-
-- your request reached the deployed app,
-- one workload called another workload by service name,
-- the call stayed on the private cluster network,
-- the responding workload had been admitted into the cluster.
-
-This HTTP check exercises the public web backend and private web-to-web
-mesh path. The database is private; it exposes `postgres-master` and
-`postgres-replica` for workloads inside the cluster.
-
-## Demo Inputs
-
-`clusters/patroni-demo/terraform.tfvars.example` contains the default demo
-values. Edit the copied `terraform.tfvars` when you want to change
-replica counts, cluster name, bootstrap endpoint, or image tags.
-
-The image values must point to public container images that Phala Cloud
-can pull. The example uses the release image names; if your deployment
-sees a registry authorization error, replace them with public image tags
-from your build.
-
-Public gateway URLs are derived from the Phala Terraform provider's
-`gateway_base_domain` attribute, so this template does not require a
-hardcoded gateway suffix.
-
-## Starter Template
-
-Use `clusters/starter` when you want the smallest custom mesh to copy:
-one public API workload group and one private worker workload group.
-It deliberately has no database and no Patroni role tags.
-
-```bash
-cd service-mesh/clusters/starter
-cp terraform.tfvars.example terraform.tfvars
-export PHALA_CLOUD_API_KEY=phak_...
-terraform init -upgrade
-terraform apply
-
-API=$(terraform output -raw api_url)
-curl "$API/hello"
-curl "$API/worker"
-```
-
-`/hello` returns the API instance identity. `/worker` makes the API call
-`http://worker:9090/hello` through the private mesh.
-
-## Repository Layout
-
-- `clusters/patroni-demo`: full demo cluster, including its Terraform
-  definition and compose files.
-- `clusters/starter`: minimal API + worker cluster template.
-- `components`: reusable platform components built into the sidecar or
-  support images.
-- `workloads`: demo workload images used by the Patroni demo.
-- `support`: helper services that are useful during bootstrap or local
-  operation but are not a cluster definition.
-- `docs`: architecture, operations, and design notes.
-
-## Default Demo Topology
-
-This section describes the shipped demo only: a public web backend plus
-an HA PostgreSQL database. The custom mesh example later in this README
-uses a different topology (`api` + `worker`) so the two examples do not
-share service names or workload groups.
-
-The default demo deploys separate workload groups. `webdemo` runs in its
-own replica set and is public through the Phala gateway. Postgres runs
-in a separate Patroni/Postgres replica set and is private, reached only
-by mesh service name.
-
-Inside the default demo cluster, workload code can call these service
-names:
+Inside the demo, workload code can call:
 
 ```text
 http://webdemo:8080
@@ -173,58 +47,291 @@ postgres-master:5432
 postgres-replica:5432
 ```
 
-Workloads do not need to know which CVM currently hosts a service. In
-the PostgreSQL part of the demo, `postgres-master` follows the current
-leader and `postgres-replica` reaches read replicas. After failover,
-clients keep using the same names.
+`postgres-master` follows the current Patroni leader.
+`postgres-replica` reaches read replicas. After failover, clients keep
+using the same names.
 
-## Define Your Own Service Mesh
+## Choose A Path
 
-This section is for replacing the shipped demo with your own workload.
-It uses these terms:
+| Goal | Start here |
+| --- | --- |
+| Run the full HA Postgres demo | [Run The HA Postgres Demo](#run-the-ha-postgres-demo) |
+| Copy the smallest custom mesh | [Create A Custom Mesh From The Starter](#create-a-custom-mesh-from-the-starter) |
+| Learn the terms before editing HCL | [Core Concepts](#core-concepts) |
+| Check the trust boundary | [What Is Verified](#what-is-verified) |
+| Work on this repository | [Development](#development) |
 
-- A workload group is one Phala app managed by Terraform. It has one
-  compose file and one or more CVM replicas.
-- A backend is a real server process in a workload group, such as an API
-  server on `127.0.0.1:8080`.
-- A route is a stable mesh name that application code dials, such as
-  `api:8080` or `worker:9090`.
-- A compose hash identifies the compose file that dstack measured for a
-  workload group.
-- An admission policy row is the Terraform-rendered rule that tells the
-  coordinator which workload identity, peer name, and compose hash are
-  allowed to join.
+## Requirements
 
-To define a custom topology, decide which containers belong in each
-workload group and which route names those workloads should use to call
-each other.
+This README assumes you can create dstack CVMs on Phala Cloud.
 
-The following custom example is intentionally different from the default
-web-backend-plus-database demo. It has a public API and a private job
-worker, with no database routes:
+You need:
 
-```mermaid
-flowchart LR
-  user["Your user"] --> gateway["Phala gateway<br/>public HTTPS"]
-  gateway --> api1["api workload<br/>api container"]
-  api1 -->|"http://worker:9090"| worker1["worker workload<br/>worker container"]
-  api1 -->|"http://api:8080"| api2["another api workload<br/>api container"]
-  coord["coordinator CVMs<br/>admission policy"] -. admits .-> api1
-  coord -. admits .-> worker1
-  coord -. admits .-> api2
+- a Phala Cloud account,
+- a Phala Cloud API key,
+- Terraform 1.5 or newer.
+
+Phala Cloud must be able to pull each container image. The included
+compose files use public images. Change images in the compose files,
+not in `terraform.tfvars`. Pin images by digest when compose hashes are
+part of an admission policy.
+
+## Run The HA Postgres Demo
+
+The HA Postgres demo exercises the public web path and private
+service-to-service paths.
+
+1. Clone the repository.
+
+   ```bash
+   git clone https://github.com/Dstack-TEE/service-mesh.git
+   cd service-mesh/clusters/patroni-demo
+   ```
+
+2. Copy the example variables.
+
+   ```bash
+   cp terraform.tfvars.example terraform.tfvars
+   ```
+
+3. Edit `terraform.tfvars` if you need a different cluster name,
+   replica count, bootstrap endpoint, KMS backend, or attestation
+   setting.
+
+4. Set your Phala Cloud API key.
+
+   ```bash
+   export PHALA_CLOUD_API_KEY=phak_...
+   ```
+
+5. Deploy the cluster.
+
+   ```bash
+   terraform init -upgrade
+   terraform apply -parallelism=1
+   ```
+
+> [!IMPORTANT]
+> Use `-parallelism=1`. This serializes app creation for the current
+> Phala provider app and slot creation path.
+
+## Verify The HA Postgres Demo
+
+After deployment, Terraform prints `webdemo_url`. Run these commands
+from `clusters/patroni-demo`.
+
+1. Read the public web URL.
+
+   ```bash
+   WEB=$(terraform output -raw webdemo_url)
+   echo "$WEB"
+   ```
+
+   The URL is built from provider state and has this shape:
+
+   ```text
+   https://<webdemo-app-id>-8080.dstack-pha-prod5.phala.network
+   ```
+
+2. Call one web workload.
+
+   ```bash
+   curl "$WEB/hello"
+   ```
+
+   Expected output:
+
+   ```text
+   hello from webdemo-0
+   ```
+
+3. Ask the service to call other webdemo instances through the private
+   mesh.
+
+   ```bash
+   curl "$WEB/all"
+   ```
+
+   The response is JSON. Exact workload names can differ.
+
+   ```json
+   {
+     "from": "webdemo-0",
+     "results": {
+       "hello from webdemo-0": 4,
+       "hello from webdemo-1": 4
+     },
+     "samples": 8
+   }
+   ```
+
+Seeing more than one workload in `results` verifies this path:
+
+- your request reached the deployed app,
+- one workload called another workload by service name,
+- the call stayed on the private cluster network,
+- the responding workload had joined through attestation admission.
+
+This HTTP check covers the public web backend and private web-to-web
+mesh path. The database is private. It exposes `postgres-master` and
+`postgres-replica` only to workloads inside the cluster.
+
+Destroy the HA Postgres demo from the same directory when you are done:
+
+```bash
+terraform destroy -parallelism=1
 ```
 
-The starter cluster in `clusters/starter/cluster.tf` is a small version
-of this shape:
+## Core Concepts
+
+After the demo works, there are two ideas to keep in mind:
+
+- Coordinators admit CVMs into the service layer.
+- Workload groups run your application containers and expose route
+  names that other workloads can call.
+
+The HA Postgres demo has this shape:
+
+```text
+coordinators
+  run Consul servers
+  run the admission broker
+
+webdemo workload group
+  runs webdemo CVMs
+  uses compose/webdemo.yaml
+  serves a local backend on 127.0.0.1:8080
+  exposes the route http://webdemo:8080
+
+postgres workload group
+  runs Postgres CVMs
+  uses compose/postgres.yaml
+  serves a local backend on 127.0.0.1:5432
+  exposes postgres-master:5432 and postgres-replica:5432
+```
+
+Application code calls route names. It does not call CVM addresses.
+For example, `webdemo` can call `postgres-master:5432`. The sidecar,
+Consul, and Envoy route that call to an admitted Postgres backend.
+
+Terraform describes each workload group with these fields:
+
+- `replicas`: how many CVMs to run for the group.
+- `compose`: which compose file Phala Cloud deploys and dstack
+  measures.
+- `compose_env`: optional values that compose files pass into container
+  environment entries.
+- `backends`: which local server ports this group provides.
+- `routes`: which stable names application code can dial.
+
+The most important terms are:
+
+- A coordinator is a CVM that admits workload CVMs and participates in
+  Consul server quorum.
+- A workload group is one Phala app managed by Terraform. `webdemo` and
+  `postgres` are workload groups in the HA Postgres demo.
+- A workload CVM is one replica inside a workload group. `webdemo-0` and
+  `webdemo-1` are workload CVMs.
+- A backend is a local server process provided by a workload group.
+  `webdemo` on `127.0.0.1:8080` is a backend.
+- A route is a stable service name. `webdemo:8080`,
+  `postgres-master:5432`, and `postgres-replica:5432` are routes.
+
+The next section explains what a workload CVM must prove before it can
+receive credentials and serve traffic for those routes.
+
+## What Is Verified
+
+When a workload CVM joins, it submits dstack evidence to a coordinator.
+The coordinator checks that evidence against the Terraform-generated
+policy.
+
+The policy checks:
+
+- the TEE quote, which proves the CVM runs under the expected trusted
+  execution environment,
+- the claimed workload identity,
+- the measured compose hash, which identifies the app definition dstack
+  measured,
+- the key provider and app identity, which decide where TEE-derived
+  keys come from and which CVMs can derive them,
+- the claimed peer ID, such as `webdemo-0` or `postgres-1`.
+
+If the evidence matches, the coordinator issues scoped Consul service
+identity.
+If the evidence does not match, the workload cannot join the service
+layer.
+
+Consul credentials are issued by attested coordinators. Workloads do
+not bring human-provided Consul tokens. Terraform declares the
+admission policy, and the coordinator uses that policy before issuing
+identity.
+
+See [`docs/attestation.md`](docs/attestation.md) for the evidence
+format and verification flow.
+
+## Create A Custom Mesh From The Starter
+
+Use `clusters/starter` when you want the smallest mesh to copy. It
+deploys one public API workload group and one private worker workload
+group. It has no database and no Patroni role tags.
+
+![Starter custom mesh architecture](docs/assets/starter-architecture.svg)
+
+1. Change into the starter cluster.
+
+   ```bash
+   cd service-mesh/clusters/starter
+   ```
+
+2. Copy the example variables.
+
+   ```bash
+   cp terraform.tfvars.example terraform.tfvars
+   ```
+
+3. Set your Phala Cloud API key.
+
+   ```bash
+   export PHALA_CLOUD_API_KEY=phak_...
+   ```
+
+4. Deploy the starter cluster.
+
+   ```bash
+   terraform init -upgrade
+   terraform apply -parallelism=1
+   ```
+
+5. Test the public API and private worker route.
+
+   ```bash
+   API=$(terraform output -raw api_url)
+   curl "$API/hello"
+   curl "$API/worker"
+   ```
+
+`/hello` returns the API instance identity. `/worker` makes the API call
+`http://worker:9090/hello` through the private mesh.
+
+To replace the starter app with your own services:
+
+1. Choose the workload groups.
+2. Put each application container in the compose file for its workload
+   group.
+3. Define each backend that a workload group hosts.
+4. Define each route name that application code should dial.
+5. Deploy and verify the route calls.
+
+The cluster shape lives in `clusters/starter/cluster.tf`:
 
 ```hcl
 locals {
   workload_groups = {
     api = {
-      replicas = 2
-      compose  = "${path.module}/compose/api.yaml"
-      images   = { API_IMAGE = var.api_image }
-      secrets  = {}
+      replicas    = 2
+      compose     = "${path.module}/compose/api.yaml"
+      compose_env = {}
       backends = {
         api = {
           port                = 8080
@@ -239,10 +346,9 @@ locals {
     }
 
     worker = {
-      replicas = 5
-      compose  = "${path.module}/compose/worker.yaml"
-      images   = { WORKER_IMAGE = var.worker_image }
-      secrets  = {}
+      replicas    = 5
+      compose     = "${path.module}/compose/worker.yaml"
+      compose_env = {}
       backends = {
         worker = {
           port                = 9090
@@ -259,15 +365,37 @@ locals {
 }
 ```
 
-Each route is a name that application code can dial. Each backend is a
-real local server hosted by one workload group. The sidecar gives every
-route a service VIP, registers local producer backends in Consul, and
-starts an egress Envoy on every workload CVM so calls work even when the
-caller does not host the target backend.
+Image references live in compose files. This keeps the compose source
+deterministic and makes the compose hash easier to audit. To change an
+image, edit the compose file. For production admission policy, use
+digest-pinned image references in compose. Environment variable values
+are not an image-binding policy. See
+[`docs/attestation.md`](docs/attestation.md).
 
-Run each application container in its own group's compose file beside
-the existing `sidecar` service. For example, `clusters/starter/compose/api.yaml` would
-contain:
+Use `compose_env` only for environment values that the compose file
+passes into containers. For example, the HA Postgres demo sets
+`DERIVE_PATRONI_PASSWORDS=1` so `bootstrap-secrets` derives Postgres
+passwords inside the TEE:
+
+```hcl
+compose_env = {
+  DERIVE_PATRONI_PASSWORDS = "1"
+}
+```
+
+After you define the workload groups, implement each group in its
+compose file. Keep the existing `sidecar` service, then add your
+application container beside it.
+
+Each route is a name that application code can dial. Each backend is a
+local server hosted by one workload group. The sidecar gives every route
+a service VIP (virtual IP) on loopback inside the CVM. It also
+registers local producer backends in Consul and starts an egress Envoy
+on every workload CVM. Each workload can dial the same route names,
+even when the serving backend runs on another CVM.
+
+For example, `clusters/starter/compose/api.yaml` contains an `api`
+service like this:
 
 ```yaml
 services:
@@ -284,8 +412,8 @@ services:
         condition: service_healthy
 ```
 
-`clusters/starter/compose/worker.yaml` would have the same sidecar and a `worker`
-service that binds `127.0.0.1:9090`.
+The worker compose file uses the same pattern and binds its service to
+`127.0.0.1:9090`.
 
 After deployment, code in either workload group can call:
 
@@ -295,55 +423,65 @@ http://worker:9090
 ```
 
 Use `/run/mesh/exec.sh` as the entrypoint for each application
-container that needs mesh service names.
+container that needs mesh service names. The sidecar generates
+route-name resolution files under `/run/mesh` from `MESH_ROUTES_JSON`.
+The helper script installs that resolution in the application container
+and then runs your command.
 
-> [!NOTE]
-> The sidecar generates route-name resolution files under `/run/mesh`
-> from `MESH_ROUTES_JSON`. The helper script installs that resolution
-> inside the application container and then `exec`s the command you
-> provided.
+For a backend port listed in `workload_groups`, avoid binding
+`0.0.0.0:<port>`. That also captures the local mesh address for the
+same port. Bind `127.0.0.1:<port>` for private mesh traffic. If the
+same service is public through the Phala gateway, also bind the host
+interface address. The demo [`webdemo`](workloads/webdemo/main.go)
+shows that dual-bind pattern.
 
-For a backend port listed in `workload_groups`, avoid binding `0.0.0.0:<port>`.
-That also captures the local mesh address for the same port. Bind
-`127.0.0.1:<port>` for mesh traffic; if the same service is public
-through the Phala gateway, also bind the host interface address. The
-demo [`webdemo`](workloads/webdemo/main.go) shows that dual-bind pattern.
+Destroy the starter cluster from the same directory when you are done:
+
+```bash
+terraform destroy -parallelism=1
+```
 
 ## Service Definition Reference
 
-A backend is a real server process in one workload group. The mesh needs
-to know who owns that backend's Consul registration:
+A backend is a server process in one workload group. The mesh also needs
+to know who owns that backend's Consul registration.
 
 - `registration.owner = "platform"` means the sidecar owns the Consul
   service registration, health check, tags, and Connect proxy wiring.
-  Use it for ordinary HTTP, TCP, or gRPC services whose routing metadata
-  is static.
+  Use it for HTTP, TCP, or gRPC services whose routing metadata is
+  static.
 - `registration.owner = "workload"` means the sidecar creates the
-  Connect-aware starting point, but workload code later updates runtime
+  Connect-aware starting point. Workload code later updates runtime
   metadata such as role tags or health checks. Use it when a service
   manager such as Patroni decides which instance is leader or replica.
 
-The custom API/worker example above uses platform-owned backends because
-`api` and `worker` are ordinary static services. The default demo
-database uses a workload-owned backend because Patroni publishes runtime
-role metadata.
+The starter API/worker example uses platform-owned backends because
+`api` and `worker` are static services. The HA Postgres demo database
+uses a workload-owned backend because Patroni publishes runtime role
+metadata.
 
-| Field | Required | Meaning |
-|---|---:|---|
+| Field | Scope | Meaning |
+| --- | --- | --- |
 | `replicas` | workload group | Number of CVMs in this workload group. |
 | `compose` | workload group | Compose file for this group. Terraform creates one `phala_app` per group. |
+| `compose_env` | workload group | Extra environment values passed to compose for this workload group. Use it for container environment variables, not image references. |
 | `backends.<name>.port` | backend | Local producer port. The workload should bind `127.0.0.1:<port>` for private mesh traffic. |
 | `backends.<name>.workload` | backend | Admission identity suffix, producing `spiffe://<cluster>/<workload>`. |
 | `backends.<name>.registration.owner` | backend | `platform` or `workload`. Use `workload` when an adapter updates runtime tags or health checks. |
-| `backends.<name>.registration.parent` | backend | Parent Consul service that routes select from. |
+| `backends.<name>.registration.parent` | backend | Parent Consul service used as the source for route selection. Usually the backend name for platform-owned services. Use a shared parent when workload-owned services publish runtime tags, such as Patroni leader and replica tags. |
 | `backends.<name>.consul_permissions` | backend | Extra Consul ACL rights for the backend identity, merged with mesh defaults. |
 | `routes.<name>.backend` | route | Backend hosted by the same workload group. Apps dial `${route-name}:${backend-port}`. |
 | `routes.<name>.role` | route | Runtime role selector. When set, the route selects service instances tagged with that role, such as `master` or `replica`. |
 
-Plan-time checks enforce the invariants the runtime depends on: route
-names are unique, every backend has one parent service and registration
-owner, workload groups have at least one slot, peer IDs are unique, route
-VIPs are unique, and producer sidecar ports are unique.
+Plan-time checks enforce runtime invariants:
+
+- compose service images are literal strings,
+- route names are unique,
+- every backend has one parent service and registration owner,
+- workload groups have at least one slot,
+- peer IDs are unique,
+- route VIPs, or virtual IPs, are unique,
+- producer sidecar ports are unique.
 
 ### Platform-Owned Services
 
@@ -361,16 +499,18 @@ proxy wiring:
 ```
 
 This produces a backend named `api`, a route named `api`, and a service
-identity `spiffe://<cluster>/api`.
+identity `spiffe://<cluster>/api`. For this static case,
+`registration.parent` is also `api`.
 
-### Default Demo Database Route Pattern
+### Workload-Owned Services
 
-The shipped backend-plus-database demo uses
-`registration.owner = "workload"` for Postgres because runtime metadata
-belongs to Patroni. The sidecar still creates a Connect-aware stub so
-Envoy can start, but `workloads/patroni/entrypoint.sh` updates dynamic metadata
-such as role tags and health checks. `postgres-master` and
-`postgres-replica` are two routes to one Patroni/Postgres backend:
+The HA Postgres demo uses `registration.owner = "workload"` for
+Postgres because Patroni owns runtime metadata. The sidecar creates a
+Connect-aware stub so Envoy can start. Then
+`workloads/patroni/entrypoint.sh` updates role tags and health checks.
+
+`postgres-master` and `postgres-replica` are two routes to one
+Patroni/Postgres backend:
 
 ```hcl
 locals {
@@ -398,51 +538,39 @@ locals {
 }
 ```
 
-Both routes share `backend = "postgres"` and select the same parent
-service, `var.cluster_name`. Patroni uses Consul for leader election,
-and `workloads/patroni/entrypoint.sh` runs the role-watcher that publishes the
-current `master` or `replica` tag. The Consul resolver for each route
-selects the matching tag, so clients keep dialing
-`postgres-master:5432` and `postgres-replica:5432` across failovers.
-
-## What Is Verified
-
-When a workload CVM joins, it submits dstack evidence to the coordinator:
-the part of the cluster that decides whether a node can receive service
-identity. The coordinator checks that evidence against the policy
-generated from the Terraform deployment definition.
-
-The policy checks include:
-
-- the TEE quote, which proves the CVM is running under the expected
-  trusted execution environment,
-- the claimed workload identity,
-- the measured compose hash, which identifies the app definition dstack
-  measured,
-- the KMS identity, which identifies the key service used by the CVM,
-- the claimed peer name.
-
-If the evidence matches, the workload receives scoped service identity.
-If it does not match, it cannot join the service layer.
-
-See [`docs/attestation.md`](docs/attestation.md) for the exact evidence format and
-verification flow.
+Both routes share `backend = "postgres"`. They also share
+`registration.parent = var.cluster_name`, so Consul can select from one
+parent service with runtime tags. Patroni uses Consul for leader
+election. The role watcher publishes the current `master` or `replica`
+tag. The Consul resolver for each route selects the matching tag.
+Clients keep dialing `postgres-master:5432` and
+`postgres-replica:5432` across failovers.
 
 ## How It Works
 
-The first-run path hides the internals, but the implementation uses
-standard infrastructure:
+The implementation uses these components:
 
 - Terraform for deployment and policy rendering,
 - Consul for membership and service catalog,
 - Envoy for service-to-service mutual TLS,
 - Patroni for PostgreSQL failover in the demo workload,
 - dstack attestation and `dstack-verifier` for evidence checks,
-- a small peer transport so CVMs can talk privately across the provider
-  network.
+- a peer transport for private CVM-to-CVM connectivity across the
+  provider network.
 
-Read [`docs/architecture.md`](docs/architecture.md) when you want the lower-level
-design.
+Read [`docs/architecture.md`](docs/architecture.md) for the network and
+service design.
+
+## Repository Layout
+
+- `clusters/patroni-demo`: full demo cluster, including Terraform and
+  compose files.
+- `clusters/starter`: minimal API + worker cluster template.
+- `components`: reusable platform components built into the sidecar or
+  support images.
+- `workloads`: demo workload images used by the HA Postgres demo.
+- `support`: helper services for bootstrap or local operation.
+- `docs`: architecture, operations, and design notes.
 
 ## Development
 
@@ -478,33 +606,38 @@ Build the sidecar image:
 docker build -t service-mesh-mesh-sidecar-check -f components/mesh-sidecar/Dockerfile .
 ```
 
-## More Docs
-
-- [`docs/attestation.md`](docs/attestation.md): trust flow and evidence checks.
-- [`docs/architecture.md`](docs/architecture.md): lower-level network and service
-  design.
-- [`docs/failover.md`](docs/failover.md): failover tests and measured recovery
-  times.
-- [`docs/robustness.md`](docs/robustness.md): failure modes and mitigations.
-- [`docs/publishing.md`](docs/publishing.md): image publishing and provenance.
-- [`docs/progress.md`](docs/progress.md): current status and remaining work.
-- [`docs/design/README.md`](docs/design/README.md): design notes and handoff
-  docs for open or historical implementation work.
-
 ## Current Limits
 
-- The public connection-bootstrap endpoint is intended for demos and
-  development. Production deployments should use a managed or
-  tenant-owned endpoint.
-- The current Terraform provider can add or remove instances without
-  disturbing the rest of the cluster, but in-place workload updates are
-  still waiting on cloud revision rollout support.
-- Cluster-wide PostgreSQL and service-layer bootstrap secrets are still
-  generated by Terraform and stored in the Terraform state file. The
-  planned replacement is secret generation and distribution inside
-  attested CVMs.
+- The public connection-bootstrap endpoint is for demos and development.
+  Production deployments should use a managed or tenant-owned endpoint.
+- Terraform can add or remove replicas. Measured compose or image
+  updates still need a workload-aware rollout procedure with health
+  checks, drain order, and admission policy handling.
+- Run one Terraform apply at a time with `-parallelism=1` for the
+  current Phala provider app and slot creation path.
+- The cluster-wide service-layer gossip key is still generated by
+  Terraform and stored in the Terraform state file. The planned
+  replacement is secret generation and distribution inside attested
+  CVMs.
 - Broker-issued service tokens are currently long-lived. Short TTLs need
   explicit renewal and reload paths.
+
+## More Docs
+
+- [`docs/attestation.md`](docs/attestation.md): trust flow and evidence
+  checks.
+- [`docs/architecture.md`](docs/architecture.md): lower-level network
+  and service design.
+- [`docs/failover.md`](docs/failover.md): failover tests and measured
+  recovery times.
+- [`docs/robustness.md`](docs/robustness.md): failure modes and
+  mitigations.
+- [`docs/publishing.md`](docs/publishing.md): image publishing and
+  provenance.
+- [`docs/progress.md`](docs/progress.md): current status and remaining
+  work.
+- [`docs/design/README.md`](docs/design/README.md): design notes and
+  handoff docs for open or historical implementation work.
 
 ## License
 

@@ -31,7 +31,7 @@
 
 services:
   sidecar:
-    image: ${MESH_SIDECAR_IMAGE}
+    image: ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest
     network_mode: host
     restart: on-failure
     # NET_ADMIN: required for `ip addr add 127.50.0.<n>/32 dev lo` at
@@ -83,7 +83,7 @@ services:
       start_period: 5s
 
   dstack-verifier:
-    image: ${DSTACK_VERIFIER_IMAGE}
+    image: dstacktee/dstack-verifier:0.5.9
     network_mode: host
     restart: on-failure
     volumes:

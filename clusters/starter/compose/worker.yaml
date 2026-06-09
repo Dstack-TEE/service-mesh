@@ -4,7 +4,7 @@
 
 services:
   sidecar:
-    image: ${MESH_SIDECAR_IMAGE}
+    image: ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest
     network_mode: host
     restart: on-failure
     cap_add:
@@ -39,7 +39,7 @@ services:
       start_period: 5s
 
   worker:
-    image: ${WORKER_IMAGE}
+    image: python:3.12-alpine
     network_mode: host
     restart: unless-stopped
     environment:

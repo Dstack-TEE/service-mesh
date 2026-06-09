@@ -100,18 +100,9 @@ variable "postgres_replicas" {
   }
 }
 
-# Image references. The mesh_sidecar image bundles bootstrap-secrets,
-# mesh-conn, consul agent, envoy, admission-client, and admission-broker.
-# Coordinators and workload groups all reference it; ROLE selects runtime
-# behavior.
-variable "mesh_sidecar_image" { type = string }
-variable "webdemo_image" { type = string }
-variable "patroni_image" { type = string }
-variable "dstack_verifier_image" {
-  type        = string
-  default     = "dstacktee/dstack-verifier:0.5.9"
-  description = "dstack-verifier image used by coordinators for attestation admission. Use a versioned tag; pin by digest in production."
-}
+# Image references live in the compose files. Edit compose to change
+# image identity. Pin images by digest when compose hashes are used for
+# production admission policy.
 
 variable "kms" {
   type        = string
@@ -192,12 +183,9 @@ locals {
 
   workload_groups = {
     webdemo = {
-      replicas = var.webdemo_replicas
-      compose  = "${path.module}/compose/webdemo.yaml"
-      images = {
-        WEBDEMO_IMAGE = var.webdemo_image
-      }
-      secrets = {}
+      replicas    = var.webdemo_replicas
+      compose     = "${path.module}/compose/webdemo.yaml"
+      compose_env = {}
       backends = {
         webdemo = {
           port     = 8080
@@ -220,13 +208,10 @@ locals {
     postgres = {
       replicas = var.postgres_replicas
       compose  = "${path.module}/compose/postgres.yaml"
-      images = {
-        PATRONI_IMAGE = var.patroni_image
-      }
       # Superuser + replication passwords are derived in-TEE by
       # bootstrap-secrets (postgres replicas share one app_id). This flag
       # turns that on; the values never touch Terraform or state.
-      secrets = {
+      compose_env = {
         DERIVE_PATRONI_PASSWORDS = "1"
       }
       backends = {
@@ -257,6 +242,12 @@ locals {
   }
 
   workload_group_names = sort(keys(local.workload_groups))
+
+  coordinator_compose = yamldecode(file("${path.module}/compose/coordinator.yaml"))
+  workload_compose_by_group = {
+    for group in local.workload_group_names :
+    group => yamldecode(file(local.workload_groups[group].compose))
+  }
 
   coordinator_peers = [
     for i in range(var.coordinator_replicas) : {
@@ -411,8 +402,6 @@ locals {
       SIGNALING_URL           = var.external_signaling_url
       TURN_HOST               = var.external_coordinator_host
       TURN_SHARED_SECRET      = var.external_turn_secret
-      MESH_SIDECAR_IMAGE      = var.mesh_sidecar_image
-      DSTACK_VERIFIER_IMAGE   = var.dstack_verifier_image
       GOSSIP_KEY              = random_bytes.gossip_key.base64
       MESH_CONN_DEBUG_ICE     = var.mesh_conn_debug_ice
       ADMISSION_BROKER_ENABLE = var.enable_attestation_admission ? "1" : ""
@@ -438,13 +427,11 @@ locals {
         SIGNALING_URL           = var.external_signaling_url
         TURN_HOST               = var.external_coordinator_host
         TURN_SHARED_SECRET      = var.external_turn_secret
-        MESH_SIDECAR_IMAGE      = var.mesh_sidecar_image
         GOSSIP_KEY              = random_bytes.gossip_key.base64
         MESH_CONN_DEBUG_ICE     = var.mesh_conn_debug_ice
         ADMISSION_BROKER_ENABLE = var.enable_attestation_admission ? "1" : ""
       },
-      local.workload_groups[slot.group].images,
-      local.workload_groups[slot.group].secrets,
+      local.workload_groups[slot.group].compose_env,
     )
   }
 
@@ -585,6 +572,13 @@ resource "phala_app" "coordinator" {
 
   lifecycle {
     precondition {
+      condition = alltrue([
+        for service_name, service in local.coordinator_compose.services :
+        !can(regex("\\$\\{", coalesce(try(tostring(service.image), null), "")))
+      ])
+      error_message = "Coordinator compose service images must be literal strings. Edit the compose file to change images."
+    }
+    precondition {
       condition     = !var.enable_attestation_admission || var.admission_expected_kms_public_key != ""
       error_message = "admission_expected_kms_public_key must be set when enable_attestation_admission is true."
     }
@@ -643,6 +637,15 @@ resource "phala_app" "workload" {
   wait_timeout_seconds = 600
 
   lifecycle {
+    precondition {
+      condition = alltrue(flatten([
+        for group in local.workload_group_names : [
+          for service_name, service in local.workload_compose_by_group[group].services :
+          !can(regex("\\$\\{", coalesce(try(tostring(service.image), null), "")))
+        ]
+      ]))
+      error_message = "Workload compose service images must be literal strings. Edit the compose file to change images."
+    }
     precondition {
       condition     = length(local.mesh_routes) == length(distinct([for route in local.mesh_routes : route.name]))
       error_message = "Route names must be globally unique."

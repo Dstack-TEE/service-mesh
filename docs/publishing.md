@@ -6,7 +6,7 @@ GHCR with Sigstore-backed GitHub Build Provenance; consumers pin by
 tag (or, better, by digest) and verify provenance with
 `gh attestation verify`.
 
-`mesh-sidecar` is the consolidated platform-plumbing image — a single
+`mesh-sidecar` is the consolidated platform-plumbing image. It is a single
 container that runs bootstrap-secrets, mesh-conn, attestation
 admission helpers, consul, and (on workers) envoy. It's the heaviest
 by a wide margin because it inherits from envoyproxy/envoy and bundles
@@ -18,7 +18,7 @@ This doc covers the three paths you'll actually use:
 2. **Manual one-off publish** (dev iteration / breaking glass)
 3. **Hot-patch on a dev cluster** (debugging without a redeploy)
 
-## 1. CI publish — the steady-state
+## 1. CI publish, the steady-state
 
 `.github/workflows/publish.yml` runs on push to `main`
 when any of the four image build contexts (or the workflow itself)
@@ -34,7 +34,7 @@ change, and on PRs touching the same paths. Each run:
 - Generates a GitHub Build Provenance attestation per image via
   `actions/attest-build-provenance@v2`. The attestation is signed by
   Sigstore using a short-lived cert obtained through the workflow's
-  GitHub OIDC token — no keys we manage. It binds the image digest to
+  GitHub OIDC token. We do not manage signing keys. It binds the image digest to
   the commit SHA, workflow file, and runner identity.
 - Pushes the attestation to GHCR alongside the image, so consumers can
   fetch and verify it via either GitHub's API or any cosign-style tool.
@@ -43,12 +43,12 @@ change, and on PRs touching the same paths. Each run:
 ### Verifying a published image as a consumer
 
 ```bash
-# By tag (lower assurance — `latest` floats):
+# By tag (lower assurance because `latest` floats):
 gh attestation verify \
   oci://ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest \
   --repo Dstack-TEE/service-mesh
 
-# By digest (preferred — pinned, won't drift):
+# By digest (preferred because it is pinned and will not drift):
 gh attestation verify \
   oci://ghcr.io/dstack-tee/service-mesh/mesh-sidecar@sha256:<digest> \
   --repo Dstack-TEE/service-mesh
@@ -59,11 +59,17 @@ GitHub Actions run on `Dstack-TEE/service-mesh`, with a workflow
 file and commit SHA you can inspect to decide whether to trust it.
 Failed or absent attestations should fail your deploy.
 
-For prod-style deploys, pin every image in `terraform.tfvars` to its
-`sha-<40-hex>` tag (or a digest) rather than `latest`, so a CI rebuild
-of `latest` doesn't silently swap your cluster's bits.
+For dev and demo deploys, image references live in the cluster compose
+files. Pin those compose references to `sha-<40-hex>` tags or digests
+rather than `latest`, so a CI rebuild of `latest` does not silently
+change the next deployment.
 
-## 2. Manual one-off publish — dev iteration
+For production admission policy that must bind image identity, put
+digest-pinned image references directly in the Compose source.
+Environment variable values are not a sufficient image-binding policy.
+See `docs/attestation.md`.
+
+## 2. Manual one-off publish, dev iteration
 
 When iterating fast on the mesh-sidecar (or any other component) you
 don't want to round-trip through CI for every byte. Two equivalent
@@ -80,11 +86,11 @@ docker build -t $TAG -f components/mesh-sidecar/Dockerfile .
 docker push $TAG
 ```
 
-Then use it in `terraform.tfvars` for a fresh dev cluster, or
-hot-patch one SSH-enabled dev CVM (see §3). Existing provider-0.3
-named-slot clusters cannot roll measured image changes in place until
-the revision-redeploy provider path lands. `ttl.sh` images expire 24h
-after push.
+Then replace the image reference in the compose file for a fresh dev
+cluster, or hot-patch one SSH-enabled dev CVM (see section 3).
+Existing provider-0.3 named-slot clusters cannot roll measured image
+changes in place until the revision-redeploy provider path lands.
+`ttl.sh` images expire 24h after push.
 
 ### b) Personal GHCR namespace (persistent, requires PAT)
 
@@ -97,11 +103,11 @@ docker build -t $TAG -f components/mesh-sidecar/Dockerfile .
 docker push $TAG
 ```
 
-These manual builds do **not** carry a build-provenance attestation —
-that comes from CI's OIDC identity. For anything user-facing, run the
+These manual builds do **not** carry a build-provenance attestation.
+That comes from CI's OIDC identity. For anything user-facing, run the
 real CI workflow.
 
-## 3. Hot-patch on a dev cluster — debugging without a redeploy
+## 3. Hot-patch on a dev cluster, debugging without a redeploy
 
 Sometimes you need to swap a binary on one running CVM right now to
 debug a fix before building a proper image. This is a dev-only path.
@@ -127,10 +133,9 @@ ssh ... root@${APP_ID}-22.${GW} "
 ```
 
 The retag tricks compose into using the new bits without touching the
-declared image string. This bypasses dstack's attestation hashes —
-**fine for dev/smoke, not for prod**. Next CVM reboot re-renders the
-compose from the platform-encrypted env and reverts to whatever's in
-your tfstate.
+declared image string. This bypasses dstack's attestation hashes.
+Use it for dev smoke testing only. Next CVM reboot re-renders the
+declared compose source.
 
 ## What to bump after a CI publish
 
@@ -139,9 +144,9 @@ When CI publishes new images:
 1. Decide whether you're pinning to `:latest` (drifts) or to the
    `:sha-...` tag from the new run (recommended). Find the new SHA by
    inspecting the workflow run's output or `gh run view`.
-2. For a new cluster, edit
-   `clusters/patroni-demo/terraform.tfvars` to that pin
-   before `terraform apply`.
+2. For a new dev or demo cluster, edit the cluster compose files to use
+   that pin before `terraform apply`. For production image binding,
+   update the compose source to use digest-pinned image references.
 3. For an existing provider-0.3 named-slot cluster, app-level image
    and compose changes are blocked until the Cloud revision-redeploy
    endpoint is wired into the provider. Today, use a new cluster or an

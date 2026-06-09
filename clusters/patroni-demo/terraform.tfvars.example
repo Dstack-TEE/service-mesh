@@ -1,28 +1,17 @@
 # Copy to terraform.tfvars and fill in.
 #
-# Defaults below point at the GHCR-published, Sigstore-attested image
-# names produced by .github/workflows/publish.yml. The packages must be
-# public before a Phala CVM can pull them; otherwise replace these with
-# public image tags from your build. Pin to a
-# specific commit by replacing `:latest` with `:sha-<full-sha>` (40-char
-# git sha) — preferred for prod since `:latest` floats. Verify a tag
-# came from this repo with:
+# Image references live in compose/*.yaml. Edit those files when you
+# need different images. Pin by digest when compose hashes are part of
+# an admission policy. Verify a published image with:
 #
 #   gh attestation verify \
 #     oci://ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest \
 #     --repo Dstack-TEE/service-mesh
 #
-# For dev iteration, replace any single line with a `ttl.sh/...:24h`
-# tag from `docker push ttl.sh/<name>-$(date +%s):24h`.
-
 cluster_name           = "demo"
 coordinator_replicas   = 3
 webdemo_replicas       = 2
 postgres_replicas      = 3
-
-mesh_sidecar_image = "ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest"
-webdemo_image      = "ghcr.io/dstack-tee/service-mesh/webdemo:latest"
-patroni_image      = "ghcr.io/dstack-tee/service-mesh/patroni:latest"
 
 # Public demo connection-bootstrap endpoint. It is open for first-run
 # testing and does not relay application traffic. Leave
@@ -36,7 +25,6 @@ external_turn_secret      = ""
 # token is derived in-TEE on the coordinators (bootstrap-secrets); it is
 # not a Terraform input and never appears in state.
 # enable_attestation_admission = true
-# dstack_verifier_image        = "dstacktee/dstack-verifier:0.5.9" # Pin by digest in production.
 # kms                          = "phala"
 # admission_expected_kms_public_key defaults to the public key for the
 # default phala KMS backend. Override it when changing kms.

@@ -7,7 +7,6 @@ Enable it in `clusters/patroni-demo/terraform.tfvars`:
 
 ```hcl
 enable_attestation_admission = true
-dstack_verifier_image        = "dstacktee/dstack-verifier:0.5.9"
 kms                          = "phala"
 # admission_expected_kms_public_key defaults to the public key for the
 # default phala KMS backend. Override it when changing kms.
@@ -19,11 +18,12 @@ in-TEE via `GetKey` (identical on every coordinator) and writes it to
 `/run/secrets/consul-management-token`. It never appears in
 `terraform.tfstate` or on the deploy host.
 
-Use a versioned verifier tag and pin it by digest for production.
-Do not rely on `dstacktee/dstack-verifier:latest`; the current
-release workflow publishes version tags and does not move `latest`.
-The verifier must support the `GetQuote` evidence shape used by
-current dstack guest agents: `quote`, `event_log`, and `vm_config`.
+The verifier image reference lives in the coordinator compose file.
+Use a versioned verifier tag and pin it by digest for production. Do
+not rely on `dstacktee/dstack-verifier:latest`; the current release
+workflow publishes version tags and does not move `latest`. The
+verifier must support the `GetQuote` evidence shape used by current
+dstack guest agents: `quote`, `event_log`, and `vm_config`.
 
 ## Trust Flow
 
@@ -113,15 +113,19 @@ as:
 - `report_data` present and equal to the broker-computed digest
 - `app_info.compose_hash` present and policy-allowed
 - `app_info.key_provider_info` present and equal to the policy-pinned
-  KMS provider id
+  key provider
 - when `production_profile = true`, `os_image_hash_verified == true`
   and `os_image_hash` equals the Terraform preflight hash
 
-KMS identity should be policy-controlled because it defines the key
-lifecycle. This example pins the long-term KMS public key in
-Terraform as `admission_expected_kms_public_key` and checks it
-against the verifier-returned `app_info.key_provider_info`. The
-verifier field is a hex-encoded JSON payload:
+Key lifecycle should be policy-controlled. It answers three questions:
+which KMS backend originates the key material, which app identity and
+path scope the `GetKey()` output, and which CVMs can derive the same
+role-local secret.
+
+This example pins the long-term KMS public key in Terraform as
+`admission_expected_kms_public_key` and checks it against the
+verifier-returned `app_info.key_provider_info`. The verifier field is
+a hex-encoded JSON payload:
 
 ```json
 {
@@ -133,6 +137,15 @@ verifier field is a hex-encoded JSON payload:
 The pinned key must match the `kms` backend used in the Phala launch
 configuration. The Terraform default matches the example's default
 `kms = "phala"` backend; override it when changing KMS backend.
+
+`bootstrap-secrets` derives role-local secrets inside the CVM with
+dstack `GetKey()`. The output is scoped by KMS backend, app identity,
+derivation path, and cluster name. Replicas in one `phala_app` share
+one `app_id`, so they can derive the same role-local secret. Different
+workload groups have different `app_id` values, so `GetKey()` does not
+produce the same value across roles. This is why the Consul management
+token and Patroni passwords can be derived in-TEE, while the current
+cross-role gossip key is still a Terraform-generated workaround.
 
 For production profiles, OS image identity should also be checked.
 This example makes that an explicit profile: set

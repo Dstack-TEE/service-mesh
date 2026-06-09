@@ -7,7 +7,7 @@
 
 services:
   sidecar:
-    image: ${MESH_SIDECAR_IMAGE}
+    image: ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest
     network_mode: host
     restart: on-failure
     cap_add:
@@ -46,7 +46,7 @@ services:
       start_period: 5s
 
   patroni:
-    image: ${PATRONI_IMAGE}
+    image: ghcr.io/dstack-tee/service-mesh/patroni:latest
     network_mode: host
     restart: on-failure
     environment:

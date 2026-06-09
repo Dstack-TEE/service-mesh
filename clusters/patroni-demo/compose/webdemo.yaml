@@ -7,7 +7,7 @@
 
 services:
   sidecar:
-    image: ${MESH_SIDECAR_IMAGE}
+    image: ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest
     network_mode: host
     restart: on-failure
     cap_add:
@@ -42,7 +42,7 @@ services:
       start_period: 5s
 
   webdemo:
-    image: ${WEBDEMO_IMAGE}
+    image: ghcr.io/dstack-tee/service-mesh/webdemo:latest
     network_mode: host
     restart: unless-stopped
     environment:

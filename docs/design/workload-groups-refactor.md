@@ -171,6 +171,7 @@ interface.
 | `backends.<name>` | A producer-side Consul service registration with `Connect.SidecarService`. |
 | `backends.<name>.registration.owner = "platform"` | The mesh sidecar owns the Consul service entry, tags, health check, and sidecar wiring. |
 | `backends.<name>.registration.owner = "workload"` | The mesh sidecar creates a Connect-aware stub, then the workload adapter owns dynamic metadata such as role tags and health checks. |
+| `backends.<name>.registration.parent` | Parent Consul service used as the source for route selection. Static platform-owned services usually use the backend name. Workload-owned services use it when a runtime adapter publishes tags under a shared parent service. |
 | `routes.<name>` | A callable mesh name. This compiles to a local listener plus, when needed, a Consul `service-resolver` redirect. |
 | `routes.<name>.role` | A Consul resolver subset selected by a `Service.Tags` filter. |
 | `consul_permissions` | ACL policy rules needed by the attested workload token. |
@@ -329,6 +330,7 @@ For Patroni:
 
 Plan-time checks should enforce:
 
+- compose service image references are literal strings;
 - route names are globally unique;
 - each `owner/backend` pair has one local port;
 - each `owner/backend` pair has one parent service;

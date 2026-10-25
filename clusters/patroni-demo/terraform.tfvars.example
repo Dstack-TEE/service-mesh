@@ -19,7 +19,7 @@ postgres_replicas      = 3
 
 # Default STUN provider; replace with your own public STUN endpoint(s).
 stun_urls = ["stun:stun.cloudflare.com:3478"]
-# signaling_urls is generated automatically by support/deploy-cluster.sh.
+# Broker URLs are derived automatically in the Terraform graph.
 # No separate server, relay credentials, or Cloudflare account is required.
 
 # Attestation admission is enabled by default. The Consul ACL management

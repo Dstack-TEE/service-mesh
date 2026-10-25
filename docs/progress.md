@@ -80,15 +80,19 @@ deployment model, trust model, or operational status.
 - The latest cloud backend fixes the KMS nonce race (#1544) with
   concurrency-safe claiming and explicit reservation states. Parallel
   app creation no longer requires manual nonce pre-allocation on that
-  backend. Older backends still require serial creation. The driver
-  exposes `DEPLOY_PARALLELISM`; see
+  backend. Older backends still require serial creation. Use Terraform's
+  `-parallelism` option; see
   [parallel bootstrap](signaling.md#parallel-bootstrap) for async
   bootstrap and per-slot environment ownership requirements.
 - Cross-host parallel deployment is validated on eight CVMs: 173-second
-  driver completion, successful webdemo traffic by 204 seconds, all 28
+  staged-driver completion, successful webdemo traffic by 204 seconds, all 28
   direct links without ICE failure, and two streaming Postgres replicas.
   The current examples require the unreleased local provider features
   documented in the deployment guide.
+- Replace the staged shell driver with provider-owned `phala_cvm_env`
+  resources. The examples allocate identities, derive the roster, and
+  configure environments through one acyclic Terraform graph. The historical
+  timing above is not a measurement of this new single-apply path.
 
 ## Decisions
 

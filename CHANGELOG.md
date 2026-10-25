@@ -6,12 +6,14 @@ This changelog tracks `service-mesh` releases.
 
 ### Changed
 
-- Run independent deployment operations concurrently (parallelism 10 by
-  default, configurable with `DEPLOY_PARALLELISM`) and remove the workload
-  boot barrier behind coordinator updates. Allocate coordinator identities
-  without waiting for boot, then enable readiness in the full apply. Persist
-  the allocated app ID so coordinator slot updates overlap bootstrap updates.
-  Document the local provider's bootstrap-only environment ownership.
+- Replace the staged deployment shell driver with `phala_cvm_env` resources.
+  Allocate coordinator identities, derive broker URLs, and configure values
+  in one ordinary apply, without targeted phases or a generated roster file.
+  The app owns measured env keys; each environment binding owns only values.
+
+- Run independent deployment operations concurrently using Terraform's
+  parallelism (10 by default), without a workload boot barrier behind
+  coordinator environment updates. Document per-slot environment ownership.
 - Pin the verifier with coalesced AMD endorsement fetches and HTTP 503 for
   collateral outages, so parallel attestation does not misclassify a rate
   limit as an invalid quote and restart otherwise healthy workloads.
@@ -22,7 +24,7 @@ This changelog tracks `service-mesh` releases.
   preventing idle NAT mappings from expiring while a peer is still booting.
 - Moved signaling onto every coordinator CVM with leaderless, authenticated
   snapshot replication; broker loss no longer requires an external server
-  or leader election. Added a staged deployment driver for endpoint wiring.
+  or leader election. Derive endpoint wiring from allocated slot identities.
 - Made public STUN configurable (Cloudflare by default) and removed TURN
   relay support from the mesh transport so application traffic stays direct.
 - Bound ICE answers to explicit offer IDs, replacing timing-based retry

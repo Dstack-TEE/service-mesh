@@ -38,25 +38,108 @@ through its normal environment/configuration. The driver preserves
 `TF_CLI_CONFIG_FILE`, including an existing local provider development
 override.
 
-The driver initializes Terraform and performs two explicit stages:
+The driver defaults to Terraform parallelism 10. Set `DEPLOY_PARALLELISM`
+to a positive integer to change both stages. Each stage still uses one
+Terraform apply and its normal state lock. Concurrent app creation requires
+a cloud backend with the KMS nonce-allocation fix for issue #1544; use
+`DEPLOY_PARALLELISM=1` with older backends. API quotas can limit request
+throughput even while CVMs boot independently.
 
-1. Provision the coordinator CVMs, each already serving its broker. A fresh
-   coordinator can wait for signaling while its broker remains reachable.
-2. Check each broker's protocol endpoint, write its instance URL into
-   `signaling.auto.tfvars.json`, and apply the full configuration.
+The driver initializes Terraform and performs three explicit stages:
+
+1. Allocate the coordinator app without waiting for its bootstrap CVM to boot,
+   and persist the returned `coordinator_app_id`.
+2. Allocate coordinator instance identities without waiting for boot
+   (`coordinator_wait_for_ready=false`).
+3. Write their instance URLs into `signaling.auto.tfvars.json`, apply the
+   full configuration with readiness enabled, then check every broker's
+   protocol endpoint. Coordinator and workload boots overlap.
 
 This breaks the Terraform dependency cycle: instance IDs only exist after
 the CVMs have been created, but the peers need those IDs in their endpoint
-roster. The generated file contains URLs, not credentials. Keep it locally
-alongside Terraform state. Repeat the driver after coordinator replacement
+roster. The generated file contains the app ID and URLs, not credentials. Keep it locally
+alongside Terraform state. The named slots consume this allocated app ID
+instead of referring to the parent resource: Terraform otherwise makes all
+slot updates wait for the bootstrap environment update to finish, even when
+the app ID is unchanged. All coordinator environment updates can now run
+concurrently. Repeat the driver after coordinator replacement
 or scaling; a replacement changes the instance URL. Ordinary workload
-updates can use `terraform apply -parallelism=1`.
+updates can use `terraform apply`.
 
-The driver deliberately targets coordinators in stage one. A targeted
-Terraform warning is expected there; stage two always performs a full
+### Parallel bootstrap
+
+Both example clusters return from bootstrap creation after
+the cloud accepts it, then let their `phala_app_instance` resources create and
+wait for all slots concurrently. The driver temporarily disables coordinator
+instance waits only for identity allocation, and enables readiness on the
+coordinator app and slots for the full apply. Workloads can boot while coordinator environments update;
+admission and Consul wait for infrastructure readiness at runtime.
+
+Coordinator slots set `wait_for_identity = true`: the cloud may accept a CVM
+before returning its `instance_id`. Waiting for that identity, rather than
+the entire boot, makes endpoint wiring possible without fabricating an ID.
+When cloud inventory has not synchronized yet, the provider reads the ID
+from the host's state API. This does not change the identity or the backend.
+
+This path requires a provider with `env_update_scope`, `wait_for_identity`, and readiness
+checks when `wait_for_ready` is enabled by an update. These changes are
+not in the published `0.3.0-beta.4` provider. Select a locally built provider
+through Terraform's `dev_overrides` before deploying the current examples.
+Workload app resources use these settings throughout; coordinator app creation
+also runs asynchronously during identity allocation:
+
+```hcl
+wait_for_ready   = false
+env_update_scope = "bootstrap"
+```
+
+`env_update_scope = "bootstrap"` prevents a parent environment update from
+overwriting the ordinals managed by other named-slot resources. Without it,
+the existing provider updates every CVM with the bootstrap environment before
+Terraform restores each slot's values, causing unnecessary reboots and
+temporary identity duplication. It does not change measured compose rollout
+scope or disable workload admission.
+
+The local provider also paces API requests at 180/minute per API key and base
+URL within its process. `PHALA_CLOUD_REQUESTS_PER_MINUTE` selects another
+positive limit for a different quota or a key shared with other tools. This
+limits request starts, not concurrent CVM boots. Other processes and the
+cloud's hourly quota remain outside this per-process budget.
+
+Run the three-stage driver with that provider. Terraform waits
+for CVM readiness, not application readiness; verify admission, mesh links,
+and application health separately before serving traffic.
+
+Both examples pin a verifier that coalesces concurrent AMD endorsement
+fetches and reports collateral outages as HTTP 503, not an invalid quote.
+Admission remains fail-closed and retries dependency failures without
+restarting the mesh; invalid signatures remain permanent failures.
+
+The driver deliberately targets coordinator identity resources in the first
+two stages. Targeted Terraform warnings are expected there; stage three performs a full
 apply. Review both plans. Do not pass targeting, replacement, variable
 overrides, destroy options, or saved plans to this driver; edit the normal
 Terraform inputs instead. Destruction remains a separate explicit command.
+
+#### Measured cross-host deployment
+
+A fresh eight-CVM Postgres demo on prod14 and prod15, on 2026-10-25,
+completed the driver in 173 seconds versus 639 seconds for the previous
+serial run. Both webdemo gateways returned successful mesh-backed replies
+by 204 seconds; both Postgres replicas were streaming by 209 seconds.
+These are observations from one run, not latency guarantees.
+
+All 28 direct peer links connected, including 16 cross-host pairs, without
+an ICE failure. The longest observed checking-to-connected interval was
+three seconds despite a 104-second spread in configured mesh start times.
+The test also checked all eight v3 manifests and KMS identities, 1,024
+mesh-backed application calls, and a no-change Terraform plan. Postgres
+roles and WAL streaming were checked through container logs; an independent
+SQL write/read workload was not run.
+
+The remaining startup time includes cloud create-operation completion and
+coordinator reboots when installing the roster. Those operations now overlap;
+parallel provisioning does not eliminate their individual boot times.
 
 ## Upgrade an existing cluster
 

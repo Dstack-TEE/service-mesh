@@ -77,16 +77,18 @@ deployment model, trust model, or operational status.
   Consul node namespace, but bind it to a platform-stable instance
   identifier when Phala exposes one without creating a deployment
   cycle.
-- Parallel deploys blocked on KMS nonce race: concurrent app creation
-  (two `terraform apply`s, or one apply with `-parallelism > 1`) fails
-  with `[ERR-02-009] ... unique constraint "ix_dstack_app_nonces_address"`
-  because the KMS `obtain_app_id` allocates the per-team-wallet nonce
-  with an unlocked read-modify-write. Verified on provider
-  0.3.0-beta.4. Use `-parallelism=1` and one apply at a time until the
-  upstream fix lands (route `obtain_app_id` through the existing
-  `.with_for_update()` path): Phala-Network/phala-cloud-monorepo#1544.
-  The provider exposes `custom_app_id` + `nonce` for manual
-  pre-allocation, but that can't cover two separate concurrent applies.
+- The latest cloud backend fixes the KMS nonce race (#1544) with
+  concurrency-safe claiming and explicit reservation states. Parallel
+  app creation no longer requires manual nonce pre-allocation on that
+  backend. Older backends still require serial creation. The driver
+  exposes `DEPLOY_PARALLELISM`; see
+  [parallel bootstrap](signaling.md#parallel-bootstrap) for async
+  bootstrap and per-slot environment ownership requirements.
+- Cross-host parallel deployment is validated on eight CVMs: 173-second
+  driver completion, successful webdemo traffic by 204 seconds, all 28
+  direct links without ICE failure, and two streaming Postgres replicas.
+  The current examples require the unreleased local provider features
+  documented in the deployment guide.
 
 ## Decisions
 

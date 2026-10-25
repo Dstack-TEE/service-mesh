@@ -6,11 +6,23 @@ This changelog tracks `service-mesh` releases.
 
 ### Changed
 
+- Run independent deployment operations concurrently (parallelism 10 by
+  default, configurable with `DEPLOY_PARALLELISM`) and remove the workload
+  boot barrier behind coordinator updates. Allocate coordinator identities
+  without waiting for boot, then enable readiness in the full apply. Persist
+  the allocated app ID so coordinator slot updates overlap bootstrap updates.
+  Document the local provider's bootstrap-only environment ownership.
+- Pin the verifier with coalesced AMD endorsement fetches and HTTP 503 for
+  collateral outages, so parallel attestation does not misclassify a rate
+  limit as an invalid quote and restart otherwise healthy workloads.
+- Pin both examples to the tested leaderless sidecar image and pin the
+  Postgres demo workloads, replacing stale or floating image references.
+
 - Deferred ICE candidate gathering until matching peer credentials arrive,
   preventing idle NAT mappings from expiring while a peer is still booting.
 - Moved signaling onto every coordinator CVM with leaderless, authenticated
   snapshot replication; broker loss no longer requires an external server
-  or leader election. Added a two-stage deployment driver for endpoint wiring.
+  or leader election. Added a staged deployment driver for endpoint wiring.
 - Made public STUN configurable (Cloudflare by default) and removed TURN
   relay support from the mesh transport so application traffic stays direct.
 - Bound ICE answers to explicit offer IDs, replacing timing-based retry

@@ -26,7 +26,7 @@
 
 services:
   sidecar:
-    image: h4x3rotab/dstack-service-mesh@sha256:6883c14e2073f009ec52ece4a4f16cecfb4121991b6ca5accb7ae7fd04dd6755
+    image: h4x3rotab/dstack-service-mesh@sha256:1f91313e33ccda7b3182f7c0b646342756777911078de9c13c890bd6a335fd2e
     network_mode: host
     restart: on-failure
     # NET_ADMIN: required for `ip addr add 127.50.0.<n>/32 dev lo` at
@@ -76,7 +76,7 @@ services:
       start_period: 5s
 
   dstack-verifier:
-    image: h4x3rotab/dstack-verifier@sha256:95ff9a09222413607fa080ddb97bf002e79a92411c80f7980d2fb52d0673a9ac
+    image: h4x3rotab/dstack-verifier@sha256:26a25f53ea9161ec26dd0072846be7d5c883b14e6b5c4ad94f05d6a311992dc6
     network_mode: host
     restart: on-failure
     volumes:

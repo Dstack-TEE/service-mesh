@@ -7,7 +7,7 @@
 
 services:
   sidecar:
-    image: h4x3rotab/dstack-service-mesh@sha256:6883c14e2073f009ec52ece4a4f16cecfb4121991b6ca5accb7ae7fd04dd6755
+    image: h4x3rotab/dstack-service-mesh@sha256:1f91313e33ccda7b3182f7c0b646342756777911078de9c13c890bd6a335fd2e
     network_mode: host
     restart: on-failure
     cap_add:
@@ -41,7 +41,7 @@ services:
       start_period: 5s
 
   webdemo:
-    image: ghcr.io/dstack-tee/service-mesh/webdemo:latest
+    image: ghcr.io/dstack-tee/service-mesh/webdemo@sha256:e628a2dc61fb2ab20210118f8ecbe9cca21484ee5af7a2272f7a216db9679eae
     network_mode: host
     restart: unless-stopped
     environment:

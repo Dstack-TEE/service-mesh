@@ -5,7 +5,7 @@
 
 services:
   sidecar:
-    image: ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest
+    image: h4x3rotab/dstack-service-mesh@sha256:1f91313e33ccda7b3182f7c0b646342756777911078de9c13c890bd6a335fd2e
     network_mode: host
     restart: on-failure
     cap_add:

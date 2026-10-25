@@ -140,7 +140,7 @@ variable "node_id" {
 }
 
 # Endpoint roster is wired after coordinator creation by support/deploy-cluster.sh.
-# Stage one starts brokers independently of the mesh; stage two distributes URLs.
+# Identity allocation starts brokers independently; the full apply distributes URLs.
 variable "signaling_urls" {
   type        = list(string)
   default     = []
@@ -150,6 +150,21 @@ variable "signaling_urls" {
       for endpoint in var.signaling_urls : can(regex("^https://[^/?#@]+/?$", endpoint))
     ])
     error_message = "signaling_urls must contain unique HTTPS origins."
+  }
+}
+variable "coordinator_wait_for_ready" {
+  type        = bool
+  default     = true
+  nullable    = false
+  description = "Deployment-driver phase control: false while allocating coordinator identities, true during the full apply."
+}
+variable "coordinator_app_id" {
+  type        = string
+  default     = null
+  description = "Coordinator app identity allocated by the deployment driver. Persisted separately so per-slot updates do not wait behind bootstrap updates."
+  validation {
+    condition     = var.coordinator_app_id == null ? true : can(regex("^app_[0-9a-f]{40}$", var.coordinator_app_id))
+    error_message = "coordinator_app_id must be null or an app_ identifier with 40 lowercase hex digits."
   }
 }
 variable "stun_urls" {
@@ -586,11 +601,13 @@ resource "phala_app" "coordinator" {
 
   env = local.coordinator_env_by_slot[local.coordinator_members[0]]
 
+  env_update_scope = "bootstrap"
+
   listed         = false
   public_logs    = true
   public_sysinfo = false
 
-  wait_for_ready       = true
+  wait_for_ready       = var.coordinator_wait_for_ready
   wait_timeout_seconds = 600
 
   lifecycle {
@@ -613,28 +630,27 @@ resource "phala_app" "coordinator" {
 }
 
 resource "phala_app_instance" "coordinator" {
-  for_each = toset(phala_app.coordinator.members)
+  for_each = toset(var.coordinator_app_id == null ? [] : local.coordinator_members)
 
-  app_id = phala_app.coordinator.app_id
+  app_id = var.coordinator_app_id
   name   = each.value
 
   # Bootstrap slot is adopted from phala_app.coordinator; its env lives
   # on phala_app.coordinator.env. Provider rejects env on the adopted
   # slot, so we pass null there.
-  env = each.value == phala_app.coordinator.name ? null : local.coordinator_env_by_slot[each.value]
+  env = each.value == local.coordinator_members[0] ? null : local.coordinator_env_by_slot[each.value]
 
-  wait_for_ready       = true
+  wait_for_ready       = var.coordinator_wait_for_ready
+  wait_for_identity    = true
   wait_timeout_seconds = 600
 }
 
 # ---------- Workload apps + slots ----------
 #
-# Workload groups depend on the full coordinator quorum: each workload
-# Consul client retry-joins the coordinator serf addrs immediately on
-# boot, so applying workloads before all coordinator slots are up just
-# generates noise. The explicit `depends_on` on the collective
-# `phala_app_instance.coordinator` gates workloads behind every
-# coordinator slot, not just the bootstrap one.
+# Identity allocation has already provided the brokers' endpoint roster.
+# Workloads can boot while coordinator environments update. Admission and
+# Consul startup wait for their infrastructure at runtime; a Terraform quorum
+# barrier would serialize independent CVM boots without adding a data dependency.
 
 resource "phala_app" "workload" {
   for_each = local.workload_groups
@@ -653,11 +669,13 @@ resource "phala_app" "workload" {
 
   env = local.workload_env_by_slot[local.workload_bootstrap_slot_name[each.key]]
 
+  env_update_scope = "bootstrap"
+
   listed         = false
   public_logs    = true
   public_sysinfo = false
 
-  wait_for_ready       = true
+  wait_for_ready       = false
   wait_timeout_seconds = 600
 
   lifecycle {
@@ -711,7 +729,6 @@ resource "phala_app" "workload" {
     }
   }
 
-  depends_on = [phala_app_instance.coordinator]
 }
 
 resource "phala_app_instance" "workload" {
@@ -766,7 +783,7 @@ output "webdemo_url" {
 
 output "coordinator_signaling_urls" {
   description = "Instance-pinned broker endpoints for independent stores."
-  value = [for slot_name in local.coordinator_members :
+  value = var.coordinator_app_id == null ? [] : [for slot_name in local.coordinator_members :
     "https://${trimprefix(phala_app_instance.coordinator[slot_name].instance_id, "0x")}-7000.${phala_app_instance.coordinator[slot_name].gateway_base_domain}"
   ]
 }

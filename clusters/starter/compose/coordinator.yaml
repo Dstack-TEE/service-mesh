@@ -26,7 +26,7 @@
 
 services:
   sidecar:
-    image: ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest
+    image: h4x3rotab/dstack-service-mesh@sha256:1f91313e33ccda7b3182f7c0b646342756777911078de9c13c890bd6a335fd2e
     network_mode: host
     restart: on-failure
     # NET_ADMIN: required for `ip addr add 127.50.0.<n>/32 dev lo` at
@@ -76,7 +76,7 @@ services:
       start_period: 5s
 
   dstack-verifier:
-    image: dstacktee/dstack-verifier:0.5.9
+    image: h4x3rotab/dstack-verifier@sha256:26a25f53ea9161ec26dd0072846be7d5c883b14e6b5c4ad94f05d6a311992dc6
     network_mode: host
     restart: on-failure
     volumes:

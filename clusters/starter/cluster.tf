@@ -126,34 +126,7 @@ variable "os_image" {
   description = "Optional Phala base OS image slug. Required when production_profile is true so the launch config and admission policy share the same explicit OS root."
 }
 
-# Endpoint roster is wired after coordinator creation by support/deploy-cluster.sh.
-# Identity allocation starts brokers independently; the full apply distributes URLs.
-variable "signaling_urls" {
-  type        = list(string)
-  default     = []
-  description = "Coordinator broker HTTPS endpoints. Managed by the deployment script."
-  validation {
-    condition = length(var.signaling_urls) == length(distinct(var.signaling_urls)) && alltrue([
-      for endpoint in var.signaling_urls : can(regex("^https://[^/?#@]+/?$", endpoint))
-    ])
-    error_message = "signaling_urls must contain unique HTTPS origins."
-  }
-}
-variable "coordinator_wait_for_ready" {
-  type        = bool
-  default     = true
-  nullable    = false
-  description = "Deployment-driver phase control: false while allocating coordinator identities, true during the full apply."
-}
-variable "coordinator_app_id" {
-  type        = string
-  default     = null
-  description = "Coordinator app identity allocated by the deployment driver. Persisted separately so per-slot updates do not wait behind bootstrap updates."
-  validation {
-    condition     = var.coordinator_app_id == null ? true : can(regex("^app_[0-9a-f]{40}$", var.coordinator_app_id))
-    error_message = "coordinator_app_id must be null or an app_ identifier with 40 lowercase hex digits."
-  }
-}
+# Broker URLs are derived from allocated coordinator identities below.
 variable "stun_urls" {
   type        = list(string)
   default     = ["stun:stun.cloudflare.com:3478"]
@@ -196,6 +169,10 @@ variable "admission_expected_kms_public_key" {
 # ---------- Cluster topology + VIP allocation ----------
 
 locals {
+  signaling_urls = [for slot_name in local.coordinator_members :
+    "https://${trimprefix(phala_app_instance.coordinator[slot_name].instance_id, "0x")}-7000.${phala_app_instance.coordinator[slot_name].gateway_base_domain}"
+  ]
+
   launch_os_image = trimspace(var.os_image) == "" ? null : trimspace(var.os_image)
 
   mesh_service_default_permissions = {
@@ -412,7 +389,7 @@ locals {
       COORDINATOR_ORDINAL     = tostring(ordinal)
       BOOTSTRAP_EXPECT        = tostring(var.coordinator_replicas)
       COORDINATOR_VIPS        = local.coordinator_vips
-      SIGNALING_URLS_JSON     = jsonencode(var.signaling_urls)
+      SIGNALING_URLS_JSON     = "[]"
       STUN_URLS_JSON          = jsonencode(var.stun_urls)
       GOSSIP_KEY              = random_bytes.gossip_key.base64
       MESH_CONN_DEBUG_ICE     = var.mesh_conn_debug_ice
@@ -436,7 +413,7 @@ locals {
         MESH_ROUTES_JSON        = local.mesh_routes_json
         LOCAL_BACKENDS_JSON     = local.local_backends_json_by_group[slot.group]
         COORDINATOR_VIPS        = local.coordinator_vips
-        SIGNALING_URLS_JSON     = jsonencode(var.signaling_urls)
+        SIGNALING_URLS_JSON     = "[]"
         STUN_URLS_JSON          = jsonencode(var.stun_urls)
         GOSSIP_KEY              = random_bytes.gossip_key.base64
         MESH_CONN_DEBUG_ICE     = var.mesh_conn_debug_ice
@@ -524,10 +501,15 @@ locals {
   coordinator_env_by_slot = {
     for slot_name, env in local.coordinator_preflight_env : slot_name => merge(env, {
       ADMISSION_POLICY_JSON = local.admission_policy_json
+      SIGNALING_URLS_JSON   = jsonencode(local.signaling_urls)
     })
   }
 
-  workload_env_by_slot = local.workload_preflight_env_by_slot
+  workload_env_by_slot = {
+    for slot_name, env in local.workload_preflight_env_by_slot : slot_name => merge(env, {
+      SIGNALING_URLS_JSON = jsonencode(local.signaling_urls)
+    })
+  }
 }
 
 # ---------- Workload preflight (group revision evidence) ----------
@@ -557,8 +539,8 @@ resource "phala_app_preflight" "workload" {
 # Single `phala_app.coordinator` owns the coordinator replica set's app
 # identity and the bootstrap CVM. The other coordinator slots are
 # declared as `phala_app_instance.coordinator` entries; each carries its
-# own per-slot env so bootstrap-secrets sees the right
-# COORDINATOR_ORDINAL on every peer.
+# own identity. phala_cvm_env owns each slot's runtime values so
+# bootstrap-secrets sees the right COORDINATOR_ORDINAL on every peer.
 
 resource "phala_app" "coordinator" {
   name    = local.coordinator_members[0]
@@ -572,15 +554,15 @@ resource "phala_app" "coordinator" {
   storage_fs     = "zfs" # MUST pin (terraform-provider-phala#5)
   docker_compose = file("${path.module}/compose/coordinator.yaml")
 
-  env = local.coordinator_env_by_slot[local.coordinator_members[0]]
-
-  env_update_scope = "bootstrap"
+  # Allocate identity with measured keys, but no runtime values. Values
+  # belong to phala_cvm_env below, after all broker identities are known.
+  env_keys = sort(keys(local.coordinator_preflight_env[local.coordinator_members[0]]))
 
   listed         = false
   public_logs    = true
   public_sysinfo = false
 
-  wait_for_ready       = var.coordinator_wait_for_ready
+  wait_for_ready       = false
   wait_timeout_seconds = 600
 
   lifecycle {
@@ -603,18 +585,26 @@ resource "phala_app" "coordinator" {
 }
 
 resource "phala_app_instance" "coordinator" {
-  for_each = toset(var.coordinator_app_id == null ? [] : local.coordinator_members)
+  for_each = toset(local.coordinator_members)
 
-  app_id = var.coordinator_app_id
+  app_id = phala_app.coordinator.app_id
   name   = each.value
 
-  # Bootstrap slot is adopted from phala_app.coordinator; its env lives
-  # on phala_app.coordinator.env. Provider rejects env on the adopted
-  # slot, so we pass null there.
-  env = each.value == local.coordinator_members[0] ? null : local.coordinator_env_by_slot[each.value]
+  # The first slot adopts the bootstrap CVM. All slots, including the
+  # bootstrap, receive values through their separate phala_cvm_env resource.
 
-  wait_for_ready       = var.coordinator_wait_for_ready
+  wait_for_ready       = false
   wait_for_identity    = true
+  wait_timeout_seconds = 600
+}
+
+resource "phala_cvm_env" "coordinator" {
+  for_each = toset(local.coordinator_members)
+
+  cvm_id = phala_app_instance.coordinator[each.key].vm_uuid
+  env    = local.coordinator_env_by_slot[each.key]
+
+  wait_for_ready       = true
   wait_timeout_seconds = 600
 }
 
@@ -652,8 +642,8 @@ resource "phala_app" "workload" {
 
   lifecycle {
     precondition {
-      condition     = length(var.signaling_urls) > 0
-      error_message = "Run support/deploy-cluster.sh for initial deployment and coordinator topology changes; the broker roster must be provisioned before workloads."
+      condition     = length(local.signaling_urls) > 0
+      error_message = "At least one coordinator signaling endpoint is required."
     }
     precondition {
       condition = alltrue(flatten([
@@ -757,7 +747,5 @@ output "api_url" {
 
 output "coordinator_signaling_urls" {
   description = "Instance-pinned broker endpoints for independent stores."
-  value = var.coordinator_app_id == null ? [] : [for slot_name in local.coordinator_members :
-    "https://${trimprefix(phala_app_instance.coordinator[slot_name].instance_id, "0x")}-7000.${phala_app_instance.coordinator[slot_name].gateway_base_domain}"
-  ]
+  value       = local.signaling_urls
 }

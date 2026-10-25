@@ -579,20 +579,8 @@ service design.
 - `workloads`: demo workload images used by the HA Postgres demo.
 - `support`: helper services for bootstrap or local operation.
 - `docs`: architecture, operations, and design notes.
-- `protocol`: unbounded Lean signaling proofs, finite TLA+ checks, and counterexamples.
 
 ## Development
-
-Run the unbounded signaling proof (Linux x86-64, Python 3.11+, `curl`, `tar`, and
-`zstd`) and finite model checks (Python 3.10+, Java, and `curl`):
-
-```bash
-python3 protocol/proof/check.py
-python3 protocol/check.py
-```
-
-See [`protocol/README.md`](protocol/README.md) for model bounds, assumptions,
-and verification status.
 
 Validate Terraform:
 

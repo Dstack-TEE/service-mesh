@@ -95,8 +95,8 @@ service-to-service paths.
    ```
 
 3. Edit `terraform.tfvars` if you need a different cluster name,
-   replica count, bootstrap endpoint, KMS backend, or attestation
-   setting.
+   replica count, STUN provider, KMS backend, attestation setting,
+   or an explicit Phala Cloud `node_id` for pinned placement.
 
 4. Set your Phala Cloud API key.
 
@@ -107,13 +107,18 @@ service-to-service paths.
 5. Deploy the cluster.
 
    ```bash
-   terraform init -upgrade
-   terraform apply -parallelism=1
+   bash ../../support/deploy-cluster.sh .
    ```
 
 > [!IMPORTANT]
-> Use `-parallelism=1`. This serializes app creation for the current
-> Phala provider app and slot creation path.
+> The deployment script serializes creation and runs two Terraform stages:
+> coordinators first, then endpoint wiring and workloads. Re-run it when
+> replacing or scaling coordinators. Ordinary workload changes can use
+> `terraform apply -parallelism=1`. See [leaderless signaling](docs/signaling.md).
+>
+> Build/publish the updated mesh-sidecar image and pin its digest in every
+> compose file before deploying this unreleased protocol change. Old images
+> do not implement the new broker endpoint; the script checks compatibility.
 
 ## Verify The HA Postgres Demo
 
@@ -299,8 +304,7 @@ group. It has no database and no Patroni role tags.
 4. Deploy the starter cluster.
 
    ```bash
-   terraform init -upgrade
-   terraform apply -parallelism=1
+   bash ../../support/deploy-cluster.sh .
    ```
 
 5. Test the public API and private worker route.
@@ -571,8 +575,20 @@ service design.
 - `workloads`: demo workload images used by the HA Postgres demo.
 - `support`: helper services for bootstrap or local operation.
 - `docs`: architecture, operations, and design notes.
+- `protocol`: unbounded Lean signaling proofs, finite TLA+ checks, and counterexamples.
 
 ## Development
+
+Run the unbounded signaling proof (Linux x86-64, Python 3.11+, `curl`, `tar`, and
+`zstd`) and finite model checks (Python 3.10+, Java, and `curl`):
+
+```bash
+python3 protocol/proof/check.py
+python3 protocol/check.py
+```
+
+See [`protocol/README.md`](protocol/README.md) for model bounds, assumptions,
+and verification status.
 
 Validate Terraform:
 
@@ -608,8 +624,10 @@ docker build -t service-mesh-mesh-sidecar-check -f components/mesh-sidecar/Docke
 
 ## Current Limits
 
-- The public connection-bootstrap endpoint is for demos and development.
-  Production deployments should use a managed or tenant-owned endpoint.
+- Signaling runs on the coordinator CVMs with no elected leader or external
+  server. Peers need one commonly reachable broker for new connections.
+  Public STUN discovers addresses; networks that prevent direct ICE
+  connections fail explicitly rather than relaying.
 - Terraform can add or remove replicas. Measured compose or image
   updates still need a workload-aware rollout procedure with health
   checks, drain order, and admission policy handling.
@@ -624,6 +642,8 @@ docker build -t service-mesh-mesh-sidecar-check -f components/mesh-sidecar/Docke
 
 ## More Docs
 
+- [`CHANGELOG.md`](CHANGELOG.md): release history and unreleased
+  changes.
 - [`docs/attestation.md`](docs/attestation.md): trust flow and evidence
   checks.
 - [`docs/architecture.md`](docs/architecture.md): lower-level network

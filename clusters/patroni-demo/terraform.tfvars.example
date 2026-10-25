@@ -13,13 +13,14 @@ coordinator_replicas   = 3
 webdemo_replicas       = 2
 postgres_replicas      = 3
 
-# Public demo connection-bootstrap endpoint. It is open for first-run
-# testing and does not relay application traffic. Leave
-# external_turn_secret empty unless you are intentionally using a
-# self-hosted relay fallback.
-external_coordinator_host = "155.138.146.255"
-external_signaling_url    = "http://155.138.146.255:7000"
-external_turn_secret      = ""
+# Pin every CVM to one Phala Cloud node when testing a specific host.
+# Find accessible node IDs with `phala nodes list`.
+# node_id = 39
+
+# Default STUN provider; replace with your own public STUN endpoint(s).
+stun_urls = ["stun:stun.cloudflare.com:3478"]
+# signaling_urls is generated automatically by support/deploy-cluster.sh.
+# No separate server, relay credentials, or Cloudflare account is required.
 
 # Attestation admission is enabled by default. The Consul ACL management
 # token is derived in-TEE on the coordinators (bootstrap-secrets); it is

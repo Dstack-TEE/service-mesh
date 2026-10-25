@@ -66,14 +66,8 @@ func TestAdmitRetriesTransientBrokerFailure(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Fatalf("decode attest request: %v", err)
 			}
-			if payload.Quote != "quote" {
-				t.Fatalf("wrong quote: %q", payload.Quote)
-			}
-			if string(payload.EventLog) != `[{"imr":3}]` {
-				t.Fatalf("wrong event log: %s", payload.EventLog)
-			}
-			if payload.VMConfig != `{"os_image_hash":"hash"}` {
-				t.Fatalf("wrong vm_config: %q", payload.VMConfig)
+			if payload.Attestation != "aabbcc" {
+				t.Fatalf("wrong attestation: %q", payload.Attestation)
 			}
 			w.Write([]byte(`{"consul_acl_token":"issued-token"}`))
 		default:
@@ -84,7 +78,9 @@ func TestAdmitRetriesTransientBrokerFailure(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	token, err := admit(ctx, broker.Client(), fakeQuoteClient{}, []string{broker.URL}, "spiffe://demo/webdemo", []byte(`{"ok":true}`))
+	client := &fakeAttestationClient{}
+	statement := []byte(`{"ok":true}`)
+	token, err := admit(ctx, broker.Client(), client, []string{broker.URL}, "spiffe://demo/webdemo", statement)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,6 +89,13 @@ func TestAdmitRetriesTransientBrokerFailure(t *testing.T) {
 	}
 	if got := challenges.Load(); got != 2 {
 		t.Fatalf("expected one retry, got %d challenge requests", got)
+	}
+	wantReportData, err := reportData(statement, "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(client.reportData, wantReportData) {
+		t.Fatal("Attest did not receive the binding statement and nonce digest")
 	}
 }
 
@@ -110,7 +113,7 @@ func TestAdmitDoesNotRetryPermanentBrokerRejection(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, err := admit(ctx, broker.Client(), fakeQuoteClient{}, []string{broker.URL}, "spiffe://demo/webdemo", []byte(`{"ok":true}`))
+	_, err := admit(ctx, broker.Client(), &fakeAttestationClient{}, []string{broker.URL}, "spiffe://demo/webdemo", []byte(`{"ok":true}`))
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -119,13 +122,11 @@ func TestAdmitDoesNotRetryPermanentBrokerRejection(t *testing.T) {
 	}
 }
 
-type fakeQuoteClient struct{}
+type fakeAttestationClient struct {
+	reportData []byte
+}
 
-func (fakeQuoteClient) GetQuote(_ context.Context, reportData []byte) (*dstack.GetQuoteResponse, error) {
-	return &dstack.GetQuoteResponse{
-		Quote:      "quote",
-		EventLog:   `[{"imr":3}]`,
-		ReportData: hex.EncodeToString(reportData),
-		VmConfig:   `{"os_image_hash":"hash"}`,
-	}, nil
+func (f *fakeAttestationClient) Attest(_ context.Context, reportData []byte) (*dstack.AttestResponse, error) {
+	f.reportData = append([]byte(nil), reportData...)
+	return &dstack.AttestResponse{Attestation: []byte{0xaa, 0xbb, 0xcc}}, nil
 }

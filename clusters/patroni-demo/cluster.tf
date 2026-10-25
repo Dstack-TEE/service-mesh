@@ -127,16 +127,39 @@ variable "os_image" {
   description = "Optional Phala base OS image slug. Required when production_profile is true so the launch config and admission policy share the same explicit OS root."
 }
 
-# External coordinator (public-IP coturn + signaling host). Used until
-# Phala enables UDP ingress on dstack apps; once that lands we can host
-# coturn + signaling inside the dstack mesh and drop these external_*
-# vars.
-variable "external_coordinator_host" { type = string }
-variable "external_signaling_url" { type = string }
-variable "external_turn_secret" {
-  type      = string
-  default   = ""
-  sensitive = true
+variable "node_id" {
+  type        = number
+  default     = null
+  nullable    = true
+  description = "Optional Phala Cloud node ID. When set, pin every coordinator and workload CVM in the demo to that node."
+
+  validation {
+    condition     = var.node_id == null ? true : var.node_id > 0
+    error_message = "node_id must be null or a positive Phala Cloud node ID."
+  }
+}
+
+# Endpoint roster is wired after coordinator creation by support/deploy-cluster.sh.
+# Stage one starts brokers independently of the mesh; stage two distributes URLs.
+variable "signaling_urls" {
+  type        = list(string)
+  default     = []
+  description = "Coordinator broker HTTPS endpoints. Managed by the deployment script."
+  validation {
+    condition = length(var.signaling_urls) == length(distinct(var.signaling_urls)) && alltrue([
+      for endpoint in var.signaling_urls : can(regex("^https://[^/?#@]+/?$", endpoint))
+    ])
+    error_message = "signaling_urls must contain unique HTTPS origins."
+  }
+}
+variable "stun_urls" {
+  type        = list(string)
+  default     = ["stun:stun.cloudflare.com:3478"]
+  description = "STUN endpoints for direct ICE traversal. TURN URLs are not supported."
+  validation {
+    condition     = alltrue([for endpoint in var.stun_urls : can(regex("^stun:[^/?#]+$", endpoint))])
+    error_message = "stun_urls must contain STUN URLs, never TURN URLs."
+  }
 }
 
 # Set to "1" to enable pion's verbose ICE debug logs (connectivity
@@ -399,9 +422,8 @@ locals {
       COORDINATOR_ORDINAL     = tostring(ordinal)
       BOOTSTRAP_EXPECT        = tostring(var.coordinator_replicas)
       COORDINATOR_VIPS        = local.coordinator_vips
-      SIGNALING_URL           = var.external_signaling_url
-      TURN_HOST               = var.external_coordinator_host
-      TURN_SHARED_SECRET      = var.external_turn_secret
+      SIGNALING_URLS_JSON     = jsonencode(var.signaling_urls)
+      STUN_URLS_JSON          = jsonencode(var.stun_urls)
       GOSSIP_KEY              = random_bytes.gossip_key.base64
       MESH_CONN_DEBUG_ICE     = var.mesh_conn_debug_ice
       ADMISSION_BROKER_ENABLE = var.enable_attestation_admission ? "1" : ""
@@ -424,9 +446,8 @@ locals {
         MESH_ROUTES_JSON        = local.mesh_routes_json
         LOCAL_BACKENDS_JSON     = local.local_backends_json_by_group[slot.group]
         COORDINATOR_VIPS        = local.coordinator_vips
-        SIGNALING_URL           = var.external_signaling_url
-        TURN_HOST               = var.external_coordinator_host
-        TURN_SHARED_SECRET      = var.external_turn_secret
+        SIGNALING_URLS_JSON     = jsonencode(var.signaling_urls)
+        STUN_URLS_JSON          = jsonencode(var.stun_urls)
         GOSSIP_KEY              = random_bytes.gossip_key.base64
         MESH_CONN_DEBUG_ICE     = var.mesh_conn_debug_ice
         ADMISSION_BROKER_ENABLE = var.enable_attestation_admission ? "1" : ""
@@ -530,6 +551,7 @@ resource "phala_app_preflight" "workload" {
   name           = local.workload_bootstrap_slot_name[each.key]
   size           = "tdx.small"
   region         = "US-WEST-1"
+  node_id        = var.node_id
   image          = local.launch_os_image
   disk_size      = 20
   storage_fs     = "zfs"
@@ -555,6 +577,7 @@ resource "phala_app" "coordinator" {
 
   size           = "tdx.small"
   region         = "US-WEST-1"
+  node_id        = var.node_id
   image          = local.launch_os_image
   kms            = var.kms
   disk_size      = 20
@@ -621,6 +644,7 @@ resource "phala_app" "workload" {
 
   size           = "tdx.small"
   region         = "US-WEST-1"
+  node_id        = var.node_id
   image          = local.launch_os_image
   kms            = var.kms
   disk_size      = 20
@@ -637,6 +661,10 @@ resource "phala_app" "workload" {
   wait_timeout_seconds = 600
 
   lifecycle {
+    precondition {
+      condition     = length(var.signaling_urls) > 0
+      error_message = "Run support/deploy-cluster.sh for initial deployment and coordinator topology changes; the broker roster must be provisioned before workloads."
+    }
     precondition {
       condition = alltrue(flatten([
         for group in local.workload_group_names : [
@@ -734,4 +762,11 @@ output "consul_ui" {
 output "webdemo_url" {
   description = "Public gateway URL for the webdemo workload. Use /hello for one replica and /all to fan out through the mesh."
   value       = "https://${trimprefix(phala_app.workload["webdemo"].app_id, "app_")}-8080.${phala_app.workload["webdemo"].gateway_base_domain}"
+}
+
+output "coordinator_signaling_urls" {
+  description = "Instance-pinned broker endpoints for independent stores."
+  value = [for slot_name in local.coordinator_members :
+    "https://${trimprefix(phala_app_instance.coordinator[slot_name].instance_id, "0x")}-7000.${phala_app_instance.coordinator[slot_name].gateway_base_domain}"
+  ]
 }

@@ -4,7 +4,7 @@
 
 # Local run artifacts
 .local/
-snapshots/
+/snapshots/
 .env
 
 # Compiled Go binaries
@@ -20,8 +20,15 @@ workloads/webdemo/webdemo
 clusters/*/.terraform/
 clusters/*/terraform.tfstate*
 clusters/*/terraform.tfvars
+clusters/*/signaling.auto.tfvars.json
+clusters/*/.signaling-roster.*
 clusters/*/*.backup
 clusters/*/*.bak
 
 # Legacy local state after moving the demo cluster to clusters/patroni-demo.
 cluster-example/
+
+# Formal verification caches; protocol/snapshots contains checked-in models.
+protocol/**/__pycache__/
+protocol/**/*.olean
+protocol/**/states/

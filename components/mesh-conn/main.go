@@ -63,7 +63,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/tls"
@@ -115,13 +114,14 @@ type InfraPort struct {
 }
 
 type Config struct {
-	SelfID       string
-	ClusterName  string
-	Peers        []Peer
-	Allowlist    []InfraPort
-	SignalingURL string
-	TurnHost     string
-	TurnSecret   string
+	SelfID          string
+	ClusterName     string
+	Peers           []Peer
+	Allowlist       []InfraPort
+	SignalingURLs   []string
+	SignalingKey    []byte
+	SignalingListen string
+	STUNURLs        []string
 }
 
 // allowedPort reports whether the given port is in the allowlist.
@@ -143,20 +143,28 @@ func loadConfig() *Config {
 	//   - SELF identity comes from /run/instance/info.json written by
 	//     the bootstrap-secrets init container (which read it from the
 	//     dstack SDK's Info() call). Falls back to PEER_ID env.
-	//   - TURN_SHARED_SECRET is optional. When present, mesh-conn also
-	//     tries TURN relay candidates. When absent, mesh-conn uses the
-	//     bootstrap host for STUN only and will not relay traffic.
+	//   - STUN_URLS_JSON contains STUN endpoints only; relays are unsupported.
+	//   - SIGNALING_URLS_JSON contains every independently reachable broker.
 	//   - PEERS_JSON still comes via env — cluster.tf computes it from
 	//     the `replicas` count and re-applies on topology change,
 	//     which propagates to every CVM via Phala's in-place compose
 	//     update path.
 
 	cfg := &Config{
-		SelfID:       readSelfID(),
-		ClusterName:  mustEnv("CLUSTER_NAME"),
-		SignalingURL: strings.TrimRight(mustEnv("SIGNALING_URL"), "/"),
-		TurnHost:     os.Getenv("TURN_HOST"),
-		TurnSecret:   readTurnSecret(),
+		SelfID:          readSelfID(),
+		ClusterName:     mustEnv("CLUSTER_NAME"),
+		SignalingListen: os.Getenv("SIGNALING_LISTEN"),
+	}
+	if err := json.Unmarshal([]byte(mustEnv("SIGNALING_URLS_JSON")), &cfg.SignalingURLs); err != nil {
+		log.Fatalf("SIGNALING_URLS_JSON: %v", err)
+	}
+	if err := json.Unmarshal([]byte(mustEnv("STUN_URLS_JSON")), &cfg.STUNURLs); err != nil {
+		log.Fatalf("STUN_URLS_JSON: %v", err)
+	}
+	var keyErr error
+	cfg.SignalingKey, keyErr = parseSignalingKey(mustEnv("GOSSIP_KEY"))
+	if keyErr != nil {
+		log.Fatal(keyErr)
 	}
 	if err := json.Unmarshal([]byte(mustEnv("PEERS_JSON")), &cfg.Peers); err != nil {
 		log.Fatalf("PEERS_JSON: %v", err)
@@ -195,42 +203,6 @@ func readSelfID() string {
 	return mustEnv("PEER_ID")
 }
 
-// readTurnSecret resolves the optional TURN shared secret in priority order:
-//
-//  1. TURN_SHARED_SECRET env (set when using an external coturn whose
-//     static-auth-secret was configured out-of-band). When this is
-//     present it MUST win, because the local TEE-derived value won't
-//     match what coturn is checking against.
-//  2. /run/secrets/turn (TEE-derived path; matches the embedded
-//     coordinator's coturn which reads the same file).
-//
-// Order matters: env beats file so that "use external coturn" can be
-// configured purely at the cluster.tf layer. An explicitly empty env
-// value is valid and means STUN-only; no TURN relay credentials are
-// configured.
-func readTurnSecret() string {
-	return readTurnSecretFrom("/run/secrets/turn")
-}
-
-func readTurnSecretFrom(file string) string {
-	if v, ok := os.LookupEnv("TURN_SHARED_SECRET"); ok {
-		if v == "" {
-			log.Printf("turn shared secret explicitly empty; using STUN-only bootstrap")
-			return ""
-		}
-		log.Printf("turn shared secret loaded from TURN_SHARED_SECRET env (%d bytes)", len(v))
-		return v
-	}
-	if b, err := os.ReadFile(file); err == nil {
-		s := strings.TrimSpace(string(b))
-		if s != "" {
-			log.Printf("turn shared secret loaded from %s (%d bytes)", file, len(s))
-			return s
-		}
-	}
-	return ""
-}
-
 // validateConfig fails fast on any silent mis-configuration that
 // would otherwise manifest as confusing runtime failures: collided
 // peer VIPs, missing self, malformed allowlist, etc. Bound at startup
@@ -242,6 +214,29 @@ func validateConfig(cfg *Config) error {
 	}
 	if err := validateAllowlist(cfg); err != nil {
 		return err
+	}
+	if len(cfg.SignalingKey) != 32 {
+		return fmt.Errorf("signaling requires a 32-byte key")
+	}
+	if len(cfg.SignalingURLs) == 0 && cfg.SignalingListen == "" {
+		return fmt.Errorf("signaling URLs are required for workload peers")
+	}
+	seenURLs := map[string]bool{}
+	for _, raw := range cfg.SignalingURLs {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || (u.Scheme != "https" && !(u.Scheme == "http" && net.ParseIP(u.Hostname()).IsLoopback())) {
+			return fmt.Errorf("signaling URL must be HTTPS (HTTP is allowed only on loopback): %q", raw)
+		}
+		if seenURLs[raw] {
+			return fmt.Errorf("duplicate signaling URL %q", raw)
+		}
+		seenURLs[raw] = true
+	}
+	for _, raw := range cfg.STUNURLs {
+		u, err := stun.ParseURI(raw)
+		if err != nil || u.Scheme != stun.SchemeTypeSTUN {
+			return fmt.Errorf("only STUN URLs are supported, got %q", raw)
+		}
 	}
 	// Log a digest of the validated config so operators can check that
 	// every peer in the cluster sees the same PEERS_JSON. Differences
@@ -370,10 +365,6 @@ func (c *Config) peerByID(id string) *Peer {
 	return nil
 }
 
-func (c *Config) signalingPeerID(peerID string) string {
-	return c.ClusterName + "/" + peerID
-}
-
 func mustEnv(k string) string {
 	v := os.Getenv(k)
 	if v == "" {
@@ -390,7 +381,9 @@ func main() {
 	flag.Parse()
 	cfg := loadConfig()
 	m := newMesh(cfg)
-	m.Run(context.Background())
+	if err := m.Run(context.Background()); err != nil {
+		log.Fatal(err)
+	}
 }
 
 // Mesh is one runtime instance — one mesh-conn process. Owns the
@@ -402,8 +395,12 @@ func main() {
 // Mesh values side by side; a package-global session map collides
 // across instances.
 type Mesh struct {
-	cfg  *Config
-	self *Peer
+	cfg       *Config
+	self      *Peer
+	signaling *signalClient
+	// Agent construction is injected by virtual-NAT integration tests.
+	// Production always uses ice.NewAgent.
+	newAgent func(*ice.AgentConfig) (*ice.Agent, error)
 
 	sessionsMu sync.Mutex
 	sessions   map[string]*peerSession
@@ -423,13 +420,31 @@ type Mesh struct {
 
 func newMesh(cfg *Config) *Mesh {
 	return &Mesh{
-		cfg:      cfg,
-		self:     cfg.peerByID(cfg.SelfID),
-		sessions: map[string]*peerSession{},
+		cfg:       cfg,
+		self:      cfg.peerByID(cfg.SelfID),
+		signaling: newSignalClient(cfg),
+		newAgent:  ice.NewAgent,
+		sessions:  map[string]*peerSession{},
 	}
 }
 
-func (m *Mesh) Run(ctx context.Context) {
+func (m *Mesh) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	serverErrors := make(chan error, 1)
+	if m.cfg.SignalingListen != "" {
+		server := &http.Server{Addr: m.cfg.SignalingListen, Handler: newSignalBroker(m.cfg),
+			ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second,
+			IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}
+		go func() {
+			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("signaling listener: %v", err)
+				serverErrors <- err
+				cancel()
+			}
+		}()
+		defer server.Close()
+	}
 	others := make([]Peer, 0, len(m.cfg.Peers)-1)
 	for _, p := range m.cfg.Peers {
 		if p.ID != m.cfg.SelfID {
@@ -439,7 +454,14 @@ func (m *Mesh) Run(ctx context.Context) {
 	log.Printf("mesh-conn: self=%s vip=%d allowlist=%v other=%d",
 		m.cfg.SelfID, m.self.Vip, allowlistPorts(m.cfg.Allowlist), len(others))
 
-	go m.pollLoop(ctx)
+	// Install all sessions before reading snapshots; delivery must not depend
+	// on which per-link goroutine happens to start first.
+	for _, p := range others {
+		m.setupPeerSession(p.ID)
+	}
+	var signalingWG sync.WaitGroup
+	signalingWG.Add(1)
+	go func() { defer signalingWG.Done(); m.signaling.run(ctx, m.applySignalRecord) }()
 
 	var wg sync.WaitGroup
 	for _, p := range others {
@@ -450,7 +472,15 @@ func (m *Mesh) Run(ctx context.Context) {
 		}(p)
 	}
 	wg.Wait()
+	cancel()
+	signalingWG.Wait()
 	log.Printf("all peer links exited")
+	select {
+	case err := <-serverErrors:
+		return err
+	default:
+		return nil
+	}
 }
 
 // =============================================================================
@@ -460,10 +490,10 @@ func (m *Mesh) Run(ctx context.Context) {
 func (m *Mesh) runPeerLink(ctx context.Context, peer Peer) {
 	// One peerSession per peer for the lifetime of mesh-conn. The
 	// session holds authCh + candidateBuffer + abortAttempt — the
-	// stable wiring pollLoop dispatches through. The ICE agent itself
+	// stable wiring snapshot delivery dispatches through. The ICE agent itself
 	// is rebuilt per attempt inside dialICE (pion's Restart() doesn't
 	// support re-Dial; see peerSession docstring).
-	sess := m.setupPeerSession(peer.ID)
+	sess := m.currentSession(peer.ID)
 	for {
 		if ctx.Err() != nil {
 			return
@@ -481,38 +511,8 @@ func (m *Mesh) runPeerLink(ctx context.Context, peer Peer) {
 	}
 }
 
-// retryBackoff is the per-peer wait between failed dialAndPump
-// attempts. Asymmetric on peer-id lex order: the side with the
-// lexicographically SMALLER id retries after 2 s, the larger-id side
-// after 5 s. The asymmetry exists to break the convergence bug where
-// two peers indefinitely supersede each other's in-flight handshakes
-// on near-simultaneous restart — see docs/robustness.md "ICE auth-race
-// convergence" for the failure analysis.
-//
-// Mechanism: with a fixed retry both peers republish auth at the
-// same cadence, so each new publish lands in the OTHER side's
-// mid-Checking window (consumedAuth = old peer auth, fresh auth
-// arriving from peer → supersede → abort → retry → publish → repeat).
-// With an asymmetric retry, the lower-id side republishes ~3 s before
-// the higher-id side wakes up. By the time the higher-id side
-// publishes its own auth, the lower side is in the "wait for auth"
-// phase of its next attempt (consumedAuth = zero) and the supersede
-// check `consumedAuth != zero` short-circuits. The new auth is
-// pushed into authCh; both sides consume each other's fresh creds
-// and the next dial converges.
-//
-// No jitter: determinism matters for the regression test, and the
-// lex split alone is sufficient on every observed repro path.
-// The pair-of-numbers (2 s, 5 s) is chosen so the gap (3 s) comfortably
-// straddles pion's slow-path abort window — observed at up to ~1 s
-// from `OnConnectionStateChange Failed` to `dialAndPump` returning
-// — without making the lower side hot-spin.
-func retryBackoff(selfID, peerID string) time.Duration {
-	if selfID < peerID {
-		return 2 * time.Second
-	}
-	return 5 * time.Second
-}
+// Retries are rate-limited, not used to elect a handshake initiator.
+func retryBackoff(_, _ string) time.Duration { return 2 * time.Second }
 
 // sleepCtx sleeps for d or until ctx is cancelled. Returns true if
 // the full sleep completed (so the caller should continue), false if
@@ -560,15 +560,27 @@ func (m *Mesh) dialAndPump(parentCtx context.Context, peer Peer, sess *peerSessi
 	cfg := m.cfg
 	self := *m.self
 	// One attemptCtx for the entire attempt — covers dialICE, QUIC dial,
-	// and the long-running pump goroutines. pollLoop and the ICE state
+	// and the long-running pump goroutines. snapshot delivery and the ICE state
 	// callback both wire abortAttempt to this ctx; cancelling it makes
-	// the whole pile collapse so runPeerLink's 5s retry can re-enter.
+	// the whole pile collapse so runPeerLink's retry can re-enter.
 	// parentCtx (from Mesh.Run) is the outer shutdown signal; cancelling
 	// it also collapses the attempt.
 	attemptCtx, abort := context.WithCancel(parentCtx)
 	sess.mu.Lock()
 	sess.consumedAuth = [2]string{}
-	sess.consumedAt = time.Time{}
+	sess.localOffer = ""
+	sess.agent = nil
+	if cfg.SelfID < peer.ID {
+		// Answers/candidates to the previous offer cannot enter the next ICE
+		// agent. Responders retain the current offer until they can answer it.
+		sess.remoteAuth = [2]string{}
+		sess.candidateBuffer = nil
+		sess.candidateSet = map[string]bool{}
+	}
+	select {
+	case <-sess.authCh:
+	default:
+	}
 	sess.linkUp = false
 	sess.abortAttempt = abort
 	sess.mu.Unlock()
@@ -983,11 +995,10 @@ func reportLinkStats(peerID string, conn *countingConn, stop <-chan struct{}) {
 }
 
 // =============================================================================
-// TLS — QUIC requires a TLS handshake. We don't rely on its identity
-// guarantees (mesh peers are already authenticated by the dstack TEE
-// layer + the TURN HMAC secret); a self-signed cert with no verification
-// is fine here. We accept any peer cert because trust is established
-// out-of-band before ICE even starts.
+// TLS — QUIC encrypts the transport using a self-signed certificate.
+// This does not establish workload identity. Shared-key signaling protects
+// rendezvous; attestation admission and Connect mTLS protect application
+// identities separately. Do not treat QUIC as an attestation check.
 // =============================================================================
 
 const quicALPN = "dstack-mesh-conn"
@@ -1029,57 +1040,33 @@ func serverTLS() *tls.Config {
 // ICE — long-lived per-peer session, agent rebuilt per attempt
 // =============================================================================
 
-// peerSession holds the per-peer state shared between dialAndPump (the
-// current attempt) and pollLoop (delivering signalling messages from the
-// broker). The session is created ONCE per peer at startup; the agent
-// inside it is replaced on every attempt.
-//
-// Why not persistent agent + Restart()? It looked clean on paper, but
-// pion's Restart() doesn't reset agent.startedCh — once you've Dial'd
-// or Accept'd once, a second Dial returns ErrMultipleStart. Restart is
-// only intended for the WebRTC pattern where you keep the same ice.Conn
-// and let the agent's connectivity checks re-form pairs internally.
-// Our pattern (re-Dial on retry, drive a fresh QUIC connection each
-// time) needs a fresh agent every iteration.
-//
-// What the session still provides — even with per-iteration agents —
-// are the three race fixes that were the whole point of touching this:
-//
-//  1. **Stale auth mid-dial.** dialICE consumes one remote auth from
-//     authCh then calls agent.Dial/Accept which bakes those credentials
-//     into every connectivity-check for the attempt's duration. If the
-//     peer republishes a fresher auth (hot-patch, asynchronous restart)
-//     ICE silently runs to its 30s timeout against creds the peer no
-//     longer recognises. Fix: pollLoop, on receiving a fresher peer
-//     auth, calls sess.abortAttempt to unwind the whole attempt; the
-//     retry loop re-enters dialICE with a fresh agent that publishes
-//     fresh local credentials and converges with the peer.
-//
-//  2. **Lost remote candidates between attempts.** Peer's gather is
-//     one-shot per attempt — if pollLoop receives peer's candidates
-//     while WE are between attempts (no agent installed yet), nothing
-//     ever calls AddRemoteCandidate and peer won't resend. Fix:
-//     pollLoop appends every received candidate into sess.candidateBuffer
-//     in addition to dispatching to the current agent; dialICE drains
-//     the buffer into the freshly-created agent before Dial. The buffer
-//     is cleared whenever pollLoop observes a fresh peer auth (peer
-//     rolled creds → old candidates won't match new ufrag anyway).
-//
-//  3. **Lost auth between attempts.** Same shape: peer auth arriving
-//     when sess.agent is mid-replacement used to be dropped. Fix:
-//     pollLoop always drain-then-pushes auth into a session-owned
-//     authCh, independent of the abort decision. dialICE always reads
-//     the freshest value from authCh when its turn comes.
+// Each pair has one deterministic initiator (the lower peer ID).
+// It publishes an offer; the responder echoes that offer ID in its answer.
+// All brokers feed this same session and ICE agent. Only a new offer or
+// changed answer to the current offer invalidates an active attempt.
 type peerSession struct {
 	authCh chan [2]string
 
 	mu              sync.Mutex
 	agent           *ice.Agent         // replaced on every dialICE attempt; guarded by mu
 	consumedAuth    [2]string          // ufrag,pwd dialICE pulled off authCh; zero before
-	consumedAt      time.Time          // when consumedAuth was last set; zero before
 	linkUp          bool               // true after QUIC + forwarders are established
 	abortAttempt    context.CancelFunc // non-nil for the duration of an attempt
 	candidateBuffer []ice.Candidate    // remote candidates seen since last peer-auth; replayed into each new agent
+	localOffer      string
+	remoteAuth      [2]string
+	candidateSet    map[string]bool
+}
+
+// Delayed callbacks belong to their originating agent, not to whichever
+// attempt currently occupies the session. In particular, Timer.Stop does not
+// wait for an already-started callback blocked on this mutex.
+func (sess *peerSession) abortAgent(agent *ice.Agent) {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.agent == agent && sess.abortAttempt != nil {
+		sess.abortAttempt()
+	}
 }
 
 const (
@@ -1098,27 +1085,8 @@ const (
 	dialAttemptTimeout = iceDisconnectedTimeout + iceFailedTimeout + 15*time.Second
 )
 
-// supersedeGrace is the minimum time an attempt must have been
-// running with consumedAuth set before pollLoop will supersede it on
-// a fresh peer auth. Inside this window we trust the in-flight ICE
-// handshake to either converge or fail on its own (host loopback
-// converges in ~50 ms; over WAN+TURN it can take a couple of seconds
-// of connectivity checks before settling). Outside the window, fresh
-// auth from the peer is treated as a credible restart signal and is
-// allowed to abort the attempt.
-//
-// Why this is necessary: without a grace window, every fresh-auth
-// arrival aborts the in-flight dial — including auths that arrived
-// for entirely innocuous reasons (peer's pollLoop happened to
-// re-emit, or a delayed broker delivery). After abort, runPeerLink
-// retries; the retry republishes auth; the peer side sees fresh auth
-// and supersedes its own in-flight dial; and the symmetry never
-// breaks. The grace window cuts this loop by absorbing the early-
-// race noise.
-const supersedeGrace = 3 * time.Second
-
 // currentSession returns the persistent session for remoteID, or nil
-// if setupPeerSession hasn't installed it yet. Used by pollLoop to
+// if setupPeerSession hasn't installed it yet. Used by snapshot delivery to
 // dispatch incoming messages to the right agent.
 func (m *Mesh) currentSession(remoteID string) *peerSession {
 	m.sessionsMu.Lock()
@@ -1142,62 +1110,30 @@ func (m *Mesh) setupPeerSession(remoteID string) *peerSession {
 
 func (m *Mesh) dialICE(remoteID string, sess *peerSession, attemptCtx context.Context) (*ice.Conn, error) {
 	cfg := m.cfg
+	var remote [2]string
+	if cfg.SelfID > remoteID {
+		var waitErr error
+		remote, waitErr = waitSignalAuth(attemptCtx, sess)
+		if waitErr != nil {
+			return nil, waitErr
+		}
+	}
 	var urls []*stun.URI
-	if cfg.TurnHost != "" {
-		urls = []*stun.URI{
-			{Scheme: stun.SchemeTypeSTUN, Host: cfg.TurnHost, Port: 3478, Proto: stun.ProtoTypeUDP},
+	for _, raw := range cfg.STUNURLs {
+		u, err := stun.ParseURI(raw)
+		if err != nil || u.Scheme != stun.SchemeTypeSTUN {
+			return nil, fmt.Errorf("invalid STUN URL %q", raw)
 		}
-		if cfg.TurnSecret != "" {
-			user, pass := turnCreds(cfg.TurnSecret, time.Hour)
-			urls = append(urls,
-				&stun.URI{Scheme: stun.SchemeTypeTURN, Host: cfg.TurnHost, Port: 3478, Proto: stun.ProtoTypeUDP, Username: user, Password: pass},
-				&stun.URI{Scheme: stun.SchemeTypeTURN, Host: cfg.TurnHost, Port: 3478, Proto: stun.ProtoTypeTCP, Username: user, Password: pass},
-			)
-		}
+		urls = append(urls, u)
 	}
 
 	candidateTypes := []ice.CandidateType{
 		ice.CandidateTypeHost,
 		ice.CandidateTypeServerReflexive,
 		ice.CandidateTypePeerReflexive,
-		ice.CandidateTypeRelay,
 	}
-	// MESH_CONN_DEBUG_ICE=1 turns on pion's verbose ICE-level logging
-	// (connectivity-check requests/responses, STUN attribute parsing,
-	// candidate-pair scoring). Off by default because it's chatty.
-	//
-	// Disconnected/Failed timeouts: pion defaults to 5 s + 25 s (= 30 s
-	// of no inbound from the selected pair before the state callback
-	// fires Failed and our outer code aborts the attempt). That is too
-	// tight for high-jitter selected pairs. TURN relay candidates add
-	// RTT, the periodic permission/allocation refreshes can briefly
-	// reorder packet flow at coturn, and pion's own 2 s consent
-	// freshness has no retry budget — a sub-second jitter window where
-	// 1 STUN binding gets lost and another arrives late is enough to
-	// start the disconnected clock, and consecutive jitter events
-	// accumulate against the 30 s budget.
-	//
-	// The fix is to give pion enough headroom that only a genuine
-	// relay-path outage (rather than refresh / jitter noise) trips
-	// Failed. We use 30 s + 60 s (= 90 s total) for two reasons:
-	//
-	//  - 60 s for the post-Disconnected portion matches QUIC's
-	//    MaxIdleTimeout — so if a link is genuinely dead, QUIC's
-	//    keepalive will return an error in our pumps at the same
-	//    time pion declares Failed, and either path triggers the
-	//    same retry in runPeerLink. We're not extending the time
-	//    to *recover* from a real failure, just the time to
-	//    *declare* one. Failover RTO is gated on Consul gossip
-	//    detection (~10 s) and Envoy xDS update, not on
-	//    per-peer-link death notice from mesh-conn, so the bump
-	//    is invisible at the RTO budget level.
-	//
-	//  - The Disconnected portion is "log-only" — our state
-	//    callback ignores Disconnected and only acts on Failed —
-	//    so its only effect is the cosmetic length of the
-	//    Disconnected stretch in the log timeline. We keep it at
-	//    30 s rather than 0 so the existing log signal is preserved
-	//    if pion ever does have a sustained outage but recovers.
+	// Preserve the existing transport liveness budget. Signaling snapshots
+	// never extend it or restart established links without a new peer session.
 	disconnectedTimeout := iceDisconnectedTimeout
 	failedTimeout := iceFailedTimeout
 	agentCfg := &ice.AgentConfig{
@@ -1212,14 +1148,14 @@ func (m *Mesh) dialICE(remoteID string, sess *peerSession, attemptCtx context.Co
 		lf.DefaultLogLevel = logging.LogLevelTrace
 		agentCfg.LoggerFactory = lf
 	}
-	agent, err := ice.NewAgent(agentCfg)
+	agent, err := m.newAgent(agentCfg)
 	if err != nil {
 		return nil, fmt.Errorf("NewAgent: %w", err)
 	}
 	// Install the agent in the session BEFORE any signalling so
-	// pollLoop dispatches AddRemoteCandidate to this attempt. Any
+	// snapshot delivery dispatches AddRemoteCandidate to this attempt. Any
 	// agent from a previous attempt is dropped (it's already failed
-	// or closed by the caller) — pollLoop captures the new pointer
+	// or closed by the caller) — snapshot delivery captures the new pointer
 	// under mu and uses that.
 	sess.mu.Lock()
 	sess.agent = agent
@@ -1235,12 +1171,31 @@ func (m *Mesh) dialICE(remoteID string, sess *peerSession, attemptCtx context.Co
 		}
 	}()
 
+	localUfrag, localPwd, err := agent.GetLocalUserCredentials()
+	if err != nil {
+		return nil, err
+	}
+	localAuth := [2]string{localUfrag, localPwd}
+	offer := localUfrag
+	if cfg.SelfID > remoteID {
+		offer = remote[0]
+	}
+	sess.mu.Lock()
+	sess.localOffer = offer
+	if cfg.SelfID > remoteID && sess.remoteAuth != remote {
+		sess.mu.Unlock()
+		err = fmt.Errorf("offer changed before answer")
+		return nil, err
+	}
+	sess.mu.Unlock()
+	m.signaling.setAuthForOffer(remoteID, localAuth, offer)
 	if err = agent.OnCandidate(func(c ice.Candidate) {
 		if c == nil {
 			return
 		}
-		if err := publish(cfg, remoteID, "candidate", c.Marshal()); err != nil {
-			log.Printf("[%s] publish candidate: %v", remoteID, err)
+		if err := m.signaling.addCandidate(remoteID, localAuth, c.Marshal()); err != nil {
+			log.Print(err)
+			sess.abortAgent(agent)
 		}
 	}); err != nil {
 		return nil, err
@@ -1248,31 +1203,15 @@ func (m *Mesh) dialICE(remoteID string, sess *peerSession, attemptCtx context.Co
 	if err = agent.OnConnectionStateChange(func(s ice.ConnectionState) {
 		log.Printf("[%s] ice state: %s", remoteID, s)
 		if s == ice.ConnectionStateFailed || s == ice.ConnectionStateClosed {
-			sess.mu.Lock()
-			if sess.abortAttempt != nil {
-				sess.abortAttempt()
-			}
-			sess.mu.Unlock()
+			sess.abortAgent(agent)
 		}
 	}); err != nil {
 		return nil, err
 	}
 
-	localUfrag, localPwd, err := agent.GetLocalUserCredentials()
-	if err != nil {
-		return nil, err
-	}
-	if err = publish(cfg, remoteID, "auth", localUfrag+":"+localPwd); err != nil {
-		return nil, fmt.Errorf("publish auth to %s: %w", remoteID, err)
-	}
-
-	if err = agent.GatherCandidates(); err != nil {
-		return nil, err
-	}
-
-	// Replay any remote candidates already buffered by pollLoop (sent
+	// Replay any remote candidates already buffered by snapshot delivery (sent
 	// by peer before this iteration's agent was even constructed).
-	// pollLoop also dispatches AddRemoteCandidate to the live agent for
+	// snapshot delivery also dispatches AddRemoteCandidate to the live agent for
 	// every NEW candidate; this catch-up only matters for candidates
 	// from peer's last gather that arrived during our retry window.
 	sess.mu.Lock()
@@ -1284,37 +1223,29 @@ func (m *Mesh) dialICE(remoteID string, sess *peerSession, attemptCtx context.Co
 		}
 	}
 
-	// Wait for remote auth. pollLoop drain-then-pushes the freshest
-	// peer auth into sess.authCh independent of state, so by the time
-	// we wake we always have the latest value. Absence of remote auth
-	// means the peer has not started or has not reached signalling yet;
-	// there is no stale ICE attempt to tear down until both sides have
-	// exchanged credentials. attemptCtx still covers process shutdown
-	// and the rare case where pollLoop explicitly aborts this attempt.
-	var remote [2]string
-	waitLog := time.NewTicker(60 * time.Second)
-	defer waitLog.Stop()
-waitRemoteAuth:
-	for {
-		select {
-		case remote = <-sess.authCh:
-			break waitRemoteAuth
-		case <-attemptCtx.Done():
-			err = fmt.Errorf("attempt aborted before auth from %s", remoteID)
+	// The initiator only accepts answers addressed to this exact offer.
+	if cfg.SelfID < remoteID {
+		remote, err = waitSignalAuth(attemptCtx, sess)
+		if err != nil {
 			return nil, err
-		case <-waitLog.C:
-			log.Printf("[%s] waiting for remote auth", remoteID)
 		}
 	}
-
-	// Record what we're about to dial against, so pollLoop can detect
-	// fresher auth from the peer and abort the attempt. See peerSession
-	// docstring for why this is necessary. consumedAt anchors the
-	// supersede grace window (see supersedeGrace).
 	sess.mu.Lock()
+	if sess.remoteAuth != remote {
+		sess.mu.Unlock()
+		err = fmt.Errorf("remote session changed before ICE")
+		return nil, err
+	}
 	sess.consumedAuth = remote
-	sess.consumedAt = time.Now()
 	sess.mu.Unlock()
+	// An offer may wait minutes for a peer to boot. Allocate reflexive NAT
+	// mappings only after both sides' credentials exist, immediately before
+	// connectivity checks, so that offline time cannot age our candidates.
+	// Publishing credentials first also lets the responder answer without
+	// depending on candidate gathering or direct connectivity.
+	if err = agent.GatherCandidates(); err != nil {
+		return nil, err
+	}
 	if m.onAttemptStarted != nil {
 		m.onAttemptStarted(remoteID)
 	}
@@ -1323,11 +1254,7 @@ waitRemoteAuth:
 	// exceeds pion's Checking+Disconnected failure budget; ordinary
 	// failure is handled by the ICE Failed state callback above.
 	dialTimer := time.AfterFunc(dialAttemptTimeout, func() {
-		sess.mu.Lock()
-		if sess.abortAttempt != nil {
-			sess.abortAttempt()
-		}
-		sess.mu.Unlock()
+		sess.abortAgent(agent)
 	})
 	defer dialTimer.Stop()
 
@@ -1344,7 +1271,7 @@ waitRemoteAuth:
 
 	if pair, perr := agent.GetSelectedCandidatePair(); perr == nil && pair != nil {
 		// Log full addresses + types so we can correlate stuck links against
-		// specific NAT mappings / TURN allocations on coturn.
+		// direct NAT mappings.
 		log.Printf("[%s] selected pair: %s %s:%d <-> %s %s:%d (proto=%s)",
 			remoteID,
 			pair.Local.Type(), pair.Local.Address(), pair.Local.Port(),
@@ -1354,159 +1281,75 @@ waitRemoteAuth:
 	return conn, nil
 }
 
-func turnCreds(secret string, ttl time.Duration) (string, string) {
-	exp := time.Now().Add(ttl).Unix()
-	user := fmt.Sprintf("%d:meshconn", exp)
-	h := hmac.New(sha1.New, []byte(secret))
-	h.Write([]byte(user))
-	return user, base64.StdEncoding.EncodeToString(h.Sum(nil))
-}
-
-// =============================================================================
-// signaling — wire format shared with the coordinator's broker
-// =============================================================================
-
-type Message struct {
-	From string `json:"from"`
-	Type string `json:"type"`
-	Data string `json:"data"`
-}
-
-func publish(cfg *Config, to, typ, data string) error {
-	body, _ := json.Marshal(Message{From: cfg.SelfID, Type: typ, Data: data})
-	resp, err := http.Post(cfg.SignalingURL+"/publish?to="+url.QueryEscape(cfg.signalingPeerID(to)),
-		"application/json", strings.NewReader(string(body)))
-	if err != nil {
-		return err
+// applySignalRecord receives an atomic full snapshot for one ICE attempt.
+// The caller serializes broker deliveries; the session lock serializes agent
+// replacement. Duplicated auth never resets candidate state or healthy links.
+func (m *Mesh) applySignalRecord(r signalRecord) {
+	sess := m.currentSession(r.From)
+	if sess == nil {
+		return
 	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(respBody)))
-	}
-	return nil
-}
-
-func (m *Mesh) pollLoop(ctx context.Context) {
-	cfg := m.cfg
-	client := &http.Client{}
-	for {
-		if ctx.Err() != nil {
+	sess.mu.Lock()
+	if m.cfg.SelfID < r.From {
+		if r.Offer != sess.localOffer || sess.localOffer == "" {
+			sess.mu.Unlock()
 			return
 		}
-		req, _ := http.NewRequestWithContext(ctx,
-			http.MethodGet,
-			cfg.SignalingURL+"/poll?peer="+url.QueryEscape(cfg.signalingPeerID(cfg.SelfID)),
-			nil)
-		resp, err := client.Do(req)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			log.Printf("poll err: %v", err)
-			if !sleepCtx(ctx, time.Second) {
-				return
-			}
+	} else if r.Offer != r.Auth[0] {
+		sess.mu.Unlock()
+		return
+	}
+	if sess.remoteAuth != r.Auth {
+		sess.remoteAuth = r.Auth
+		sess.candidateBuffer = nil
+		sess.candidateSet = map[string]bool{}
+		// A changed peer session is a protocol event, not a timing heuristic.
+		// A responder follows new offers even before it consumes the auth.
+		if sess.abortAttempt != nil && (sess.consumedAuth != [2]string{} ||
+			(m.cfg.SelfID > r.From && sess.localOffer != "" && sess.localOffer != r.Offer)) {
+			sess.abortAttempt()
+		}
+	}
+	select {
+	case <-sess.authCh:
+	default:
+	}
+	sess.authCh <- r.Auth
+	var newCandidates []ice.Candidate
+	for _, raw := range r.Candidates {
+		if sess.candidateSet[raw] {
 			continue
 		}
-		var msgs []Message
-		if err := json.NewDecoder(resp.Body).Decode(&msgs); err != nil {
-			log.Printf("poll decode: %v", err)
-			resp.Body.Close()
-			if !sleepCtx(ctx, time.Second) {
-				return
-			}
+		c, err := ice.UnmarshalCandidate(raw)
+		if err != nil || c.Type() == ice.CandidateTypeRelay {
 			continue
 		}
-		resp.Body.Close()
-		for _, msg := range msgs {
-			sess := m.currentSession(msg.From)
-			if sess == nil {
-				// setupPeerSession hasn't installed this remote yet;
-				// drop. runPeerLink installs all peer sessions at
-				// startup, so this only fires if we receive a message
-				// from a non-peer id (mis-configured cluster).
-				continue
-			}
-			switch msg.Type {
-			case "auth":
-				parts := strings.SplitN(msg.Data, ":", 2)
-				if len(parts) != 2 {
-					log.Printf("[%s] bad auth %q", msg.From, msg.Data)
-					continue
-				}
-				newAuth := [2]string{parts[0], parts[1]}
-
-				// Fresh peer auth is the only reliable signal we have
-				// that peer rolled credentials (process restart, ICE
-				// restart, etc). Three things have to happen atomically
-				// under sess.mu:
-				//   1. Drop the candidate buffer — those candidates
-				//      belong to the previous peer epoch and won't
-				//      pair against the new credentials.
-				//   2. If an attempt is currently in flight against
-				//      different consumed creds AND has been running
-				//      long enough (see supersedeGrace) for the
-				//      handshake to have had a fair chance, abort it;
-				//      runPeerLink retries with a fresh agent +
-				//      republished auth.
-				//   3. (Outside mu, below.) Replace the buffered auth
-				//      in authCh so the next dialICE iteration reads
-				//      the freshest value.
-				sess.mu.Lock()
-				sess.candidateBuffer = nil
-				zero := [2]string{}
-				if sess.linkUp {
-					log.Printf("[%s] fresh auth (ufrag=%s) queued for next attempt; current link is up",
-						msg.From, newAuth[0])
-				} else if sess.abortAttempt != nil &&
-					sess.consumedAuth != zero &&
-					sess.consumedAuth != newAuth {
-					elapsed := time.Since(sess.consumedAt)
-					if elapsed >= supersedeGrace {
-						log.Printf("[%s] fresh auth (ufrag=%s) supersedes consumed (ufrag=%s) after %s — aborting attempt",
-							msg.From, newAuth[0], sess.consumedAuth[0], elapsed.Round(time.Millisecond))
-						sess.abortAttempt()
-					} else {
-						log.Printf("[%s] fresh auth (ufrag=%s) ignored — in-flight attempt has only run %s (< %s grace); newer creds queued for the next attempt",
-							msg.From, newAuth[0], elapsed.Round(time.Millisecond), supersedeGrace)
-					}
-				}
-				sess.mu.Unlock()
-
-				// Drain-then-push: the channel is buffer-1 and we want
-				// only the freshest auth retained for the next read.
-				// pion never reuses ufrag/pwd across restarts, so the
-				// freshest message is always what we want to consume.
-				select {
-				case <-sess.authCh:
-				default:
-				}
-				sess.authCh <- newAuth
-			case "candidate":
-				cand, err := ice.UnmarshalCandidate(msg.Data)
-				if err != nil {
-					log.Printf("[%s] bad candidate: %v", msg.From, err)
-					continue
-				}
-				// Buffer first, then dispatch to the live agent if any.
-				// Each attempt builds a fresh agent that starts with
-				// zero remote candidates; dialICE drains this buffer
-				// into the new agent before Dial so peer's candidates
-				// from the previous attempt window don't get lost.
-				// agent may be nil if we haven't entered dialICE yet,
-				// or stale if we're mid-replacement — both are fine,
-				// the buffer-drain on next dialICE catches them up.
-				sess.mu.Lock()
-				sess.candidateBuffer = append(sess.candidateBuffer, cand)
-				agent := sess.agent
-				sess.mu.Unlock()
-				if agent != nil {
-					if err := agent.AddRemoteCandidate(cand); err != nil {
-						log.Printf("[%s] AddRemoteCandidate: %v", msg.From, err)
-					}
-				}
+		sess.candidateSet[raw] = true
+		sess.candidateBuffer = append(sess.candidateBuffer, c)
+		newCandidates = append(newCandidates, c)
+	}
+	agent := sess.agent
+	if sess.consumedAuth != [2]string{} && sess.consumedAuth != r.Auth {
+		agent = nil
+	}
+	sess.mu.Unlock()
+	// Never call pion while holding the session mutex: its state callbacks
+	// acquire that mutex too. If the agent changes here, the replacement
+	// replays candidateBuffer, so delivery to the old agent loses no state.
+	if agent != nil {
+		for _, c := range newCandidates {
+			if err := agent.AddRemoteCandidate(c); err != nil {
+				log.Printf("[%s] AddRemoteCandidate: %v", r.From, err)
 			}
 		}
+	}
+}
+
+func waitSignalAuth(ctx context.Context, sess *peerSession) ([2]string, error) {
+	select {
+	case auth := <-sess.authCh:
+		return auth, nil
+	case <-ctx.Done():
+		return [2]string{}, ctx.Err()
 	}
 }

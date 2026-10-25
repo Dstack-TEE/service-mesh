@@ -59,9 +59,10 @@ Future work:
 - Gate reads on attestation-issued Consul tokens.
 - Remove the Terraform `random_bytes.gossip_key` resource.
 
-The TURN shared secret is separate. It is the NAT traversal admission
-key for the current VPC-like overlay model and may remain
-Terraform-distributed unless the rendezvous threat model changes.
+Leaderless signaling derives separate access and record-MAC keys from
+the cluster gossip bootstrap key. This authenticates cluster membership
+using shared-key trust, not attested individual identities. TURN is not
+supported by the mesh transport.
 
 ### Upgrade Policy
 
@@ -93,15 +94,16 @@ Future work:
 
 ### Rendezvous Hardening
 
-Low-level ICE rendezvous still uses the TURN HMAC / shared-secret
-model. Attestation gates Consul and Connect identity, not signaling.
+Low-level ICE rendezvous uses authenticated, versioned snapshots across
+all coordinator brokers. Attestation gates Consul and Connect identity,
+not signaling. See [leaderless signaling](../signaling.md).
 
 Future work:
 
-- Run redundant signaling/TURN coordinators.
-- Sign signaling `auth` and `candidate` messages with an
-  attestation-rooted identity if the coordinator is no longer treated
-  as simple untrusted transport.
+- Replace shared-key snapshot MACs with attestation-rooted individual
+  signatures if compromised coordinators must not impersonate peers.
+- Preserve bootstrap independence when replacing the Terraform-distributed
+  cross-role key; obtaining it must not itself require an established mesh.
 
 ## Success Criteria
 

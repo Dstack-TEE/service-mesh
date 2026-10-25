@@ -204,7 +204,7 @@ func ParsePolicy(b []byte) (*Policy, error) {
 func (p *Policy) Match(identity, composeHash, peerID string) (*Workload, error) {
 	normalized, err := normalizeComposeHash(composeHash)
 	if err != nil {
-		return nil, fmt.Errorf("invalid compose_hash from quote: %w", err)
+		return nil, fmt.Errorf("invalid compose_hash from attestation: %w", err)
 	}
 	peerID = strings.TrimSpace(peerID)
 	for _, w := range p.byIdentity[identity] {
@@ -218,7 +218,7 @@ func (p *Policy) Match(identity, composeHash, peerID string) (*Workload, error) 
 	return nil, fmt.Errorf("identity %q is not allowed for compose_hash %s", identity, normalized)
 }
 
-func (p *Policy) CheckKMS(verified *VerifiedQuote) error {
+func (p *Policy) CheckKMS(verified *VerifiedEvidence) error {
 	if p.KMS == nil {
 		return nil
 	}
@@ -233,7 +233,7 @@ func (p *Policy) CheckKMS(verified *VerifiedQuote) error {
 	return nil
 }
 
-func (p *Policy) CheckOSImage(verified *VerifiedQuote) error {
+func (p *Policy) CheckOSImage(verified *VerifiedEvidence) error {
 	if p.OSImage == nil {
 		return nil
 	}
@@ -354,6 +354,16 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "BAD_REQUEST", err.Error())
 		return
 	}
+	hasAttestation := strings.TrimSpace(req.Attestation) != ""
+	hasLegacyEvidence := strings.TrimSpace(req.Quote) != "" || len(req.EventLog) != 0 || strings.TrimSpace(req.VMConfig) != ""
+	if hasAttestation && hasLegacyEvidence {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "attestation cannot be combined with quote, event_log, or vm_config")
+		return
+	}
+	if !hasAttestation && (strings.TrimSpace(req.Quote) == "" || len(req.EventLog) == 0 || strings.TrimSpace(req.VMConfig) == "") {
+		writeError(w, http.StatusBadRequest, "BAD_REQUEST", "attestation is required")
+		return
+	}
 
 	binding := firstNonEmpty(req.Binding, req.CertPubKey)
 	bindingStatement, err := parseBindingStatement(req.Identity, binding)
@@ -375,11 +385,15 @@ func (s *Server) handleAttest(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	verified, err := s.verifier.Verify(ctx, VerifyRequest{
-		Quote:    firstNonEmpty(req.Quote, req.Attestation),
-		EventLog: rawJSONAsString(req.EventLog),
-		VMConfig: req.VMConfig,
-	})
+	verifyRequest := VerifyRequest{}
+	if req.Attestation != "" {
+		verifyRequest.Attestation = &req.Attestation
+	} else {
+		verifyRequest.Quote = req.Quote
+		verifyRequest.EventLog = rawJSONAsString(req.EventLog)
+		verifyRequest.VMConfig = req.VMConfig
+	}
+	verified, err := s.verifier.Verify(ctx, verifyRequest)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "VERIFIER_FAILED", err.Error())
 		return
@@ -546,7 +560,7 @@ type VerifyRequest struct {
 	VMConfig    string  `json:"vm_config"`
 }
 
-type VerifiedQuote struct {
+type VerifiedEvidence struct {
 	Valid               bool
 	Reason              string
 	ComposeHash         string
@@ -562,7 +576,7 @@ type VerifierClient struct {
 	HTTP *http.Client
 }
 
-func (c *VerifierClient) Verify(ctx context.Context, req VerifyRequest) (*VerifiedQuote, error) {
+func (c *VerifierClient) Verify(ctx context.Context, req VerifyRequest) (*VerifiedEvidence, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -636,7 +650,7 @@ func (c *VerifierClient) Verify(ctx context.Context, req VerifyRequest) (*Verifi
 	valid := parsed.IsValid && quoteVerified && eventLogVerified
 	reason := firstNonEmpty(parsed.Reason, parsed.Error)
 	if !valid && reason == "" {
-		reason = "verifier rejected quote"
+		reason = "verifier rejected attestation"
 	}
 	if valid && composeHashRaw == "" {
 		return nil, errors.New("verifier response missing app_info.compose_hash")
@@ -665,7 +679,7 @@ func (c *VerifierClient) Verify(ctx context.Context, req VerifyRequest) (*Verifi
 			return nil, fmt.Errorf("verifier app_info.key_provider_info: %w", err)
 		}
 	}
-	return &VerifiedQuote{
+	return &VerifiedEvidence{
 		Valid:               valid,
 		Reason:              reason,
 		ComposeHash:         composeHash,

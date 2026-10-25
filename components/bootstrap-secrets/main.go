@@ -5,7 +5,7 @@
 //
 //   1. Use the dstack Go SDK to learn this CVM's identity (AppID,
 //      InstanceID, ComposeHash) and to derive cluster-wide secrets
-//      (gossip key, TURN secret, Connect-CA seed) deterministically
+//      (Connect-CA seed) deterministically
 //      from the app's KMS-bound key. Same secrets across every
 //      replica of the same phala_app, never visible to the deploy
 //      host.
@@ -16,7 +16,7 @@
 //      the slot's permanent owner so restarts re-find their own slot.
 //
 //   3. Write everything dependent services need to a tmpfs volume
-//      shared via compose. /run/secrets/{turn,ca-seed} are
+//      shared via compose. /run/secrets/ca-seed are
 //      mode-0400 binary blobs; /run/instance/info.json carries the
 //      identity + ordinal. Per-protocol ports are no longer computed
 //      here — every service binds its canonical well-known port on
@@ -74,7 +74,7 @@ func main() {
 	// consumers all share one app_id, so GetKey (rooted at app_id)
 	// yields identical bytes across the app's replicas. The Consul
 	// management token (coordinators, 2b) and the Patroni passwords
-	// (postgres, 2c) are derived this way, plus the always-on turn/
+	// (postgres, 2c) are derived this way, plus the reserved
 	// ca-seed below.
 	//
 	// WORKAROUND scope note: the gossip key is NOT derived here. It is
@@ -85,16 +85,11 @@ func main() {
 	// docs/design/attestation-admission.md for the principled fix.
 	//
 	// What's still derived here is intentionally narrow:
-	//   turn:    handed to mesh-conn for coturn auth (the actual
-	//            coturn host uses an out-of-band shared secret —
-	//            this is for the case where a future TEE-resident
-	//            TURN allocator wants per-app HMAC material).
 	//   ca-seed: reserved for a future Connect-CA-from-attestation
 	//            path; not currently consumed.
 	derived := []struct {
 		name, path, format string
 	}{
-		{"turn", "dstack-mesh/turn", "hex"},
 		{"ca-seed", "dstack-mesh/connect-ca", "hex"},
 	}
 	for _, d := range derived {

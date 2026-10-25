@@ -112,9 +112,10 @@ service-to-service paths.
    ```
 
 > [!IMPORTANT]
-> Terraform allocates coordinator identities, derives their broker URLs,
-> then configures values through `phala_cvm_env`. Independent boots and
-> updates overlap in one apply, including after scaling or replacement.
+> The local `mesh-coordinators` module keeps env values beside each named
+> instance and handles identity allocation, broker URLs, and configuration.
+> Independent boots and updates overlap in one apply, including after
+> scaling or replacement.
 > No shell driver or generated roster is needed. See
 > [leaderless signaling](docs/signaling.md).
 >
@@ -576,6 +577,8 @@ service design.
 - `clusters/patroni-demo`: full demo cluster, including Terraform and
   compose files.
 - `clusters/starter`: minimal API + worker cluster template.
+- `modules/mesh-coordinators`: named coordinator groups with inline env inputs
+  and internally derived broker rosters.
 - `components`: reusable platform components built into the sidecar or
   support images.
 - `workloads`: demo workload images used by the HA Postgres demo.
@@ -583,6 +586,14 @@ service design.
 - `docs`: architecture, operations, and design notes.
 
 ## Development
+
+With the unreleased local provider selected, run the coordinator module's
+mock-provider tests (no Cloud resources are created):
+
+```bash
+terraform -chdir=modules/mesh-coordinators get
+terraform -chdir=modules/mesh-coordinators test
+```
 
 Validate Terraform:
 

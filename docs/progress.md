@@ -93,6 +93,10 @@ deployment model, trust model, or operational status.
   resources. The examples allocate identities, derive the roster, and
   configure environments through one acyclic Terraform graph. The historical
   timing above is not a measurement of this new single-apply path.
+- Both examples now use the repo-local `mesh-coordinators` module. Callers
+  configure named instances and their env values; the module owns roster
+  derivation and the separate provider environment resources. State moves
+  preserve the existing coordinator resource bindings.
 
 ## Decisions
 

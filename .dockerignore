@@ -4,6 +4,7 @@
 snapshots
 
 clusters/*/.terraform
+modules/**/.terraform
 clusters/*/terraform.tfstate*
 clusters/*/terraform.tfvars
 clusters/*/signaling.auto.tfvars.json

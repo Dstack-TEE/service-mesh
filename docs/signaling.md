@@ -42,12 +42,17 @@ Supply credentials through the provider's normal configuration.
 
 Terraform now expresses the bootstrap dependencies directly in one apply:
 
-1. `phala_app.coordinator` creates the bootstrap CVM with its measured
+Both examples use [`modules/mesh-coordinators`](../modules/mesh-coordinators/README.md).
+Put shared values in its `env` input and per-slot values in `instances[name].env`.
+The module owns `SIGNALING_URLS_JSON`; callers never feed its outputs back into
+its inputs. Internally:
+
+1. `module.coordinators.phala_app.this` creates the bootstrap CVM with its measured
    environment-key allowlist, without owning runtime values or waiting for boot.
-2. `phala_app_instance.coordinator` adopts the bootstrap slot and allocates
+2. `module.coordinators.phala_app_instance.this` adopts the bootstrap slot and allocates
    the other named slots. `wait_for_identity = true` obtains their real
    instance-pinned endpoint identities without requiring running workloads.
-3. `phala_cvm_env.coordinator` configures each coordinator's complete
+3. `module.coordinators.phala_cvm_env.this` configures each coordinator's complete
    environment map, including the derived broker roster, then waits for CVM
    readiness. Workload app creation depends on the identities, not these
    environment updates, so independent boots and updates overlap.
@@ -98,6 +103,12 @@ same allowlist and add one environment binding per existing CVM. The provider
 relinquishes inline value ownership without clearing the payload. Expect
 in-place configuration updates, not CVM replacement. This is not a rolling
 application-upgrade mechanism.
+
+The examples also include `moved` blocks from the former flat coordinator
+resources into `module.coordinators`. Keep them, preserve names and placement,
+and run `terraform init` to load the local module before planning. Existing
+environment bindings move too; deployments from the staged driver create
+those bindings for the first time. Do not use `state rm` to perform this move.
 
 ### Prior cross-host validation
 

@@ -6,6 +6,10 @@ This changelog tracks `service-mesh` releases.
 
 ### Changed
 
+- Add `modules/mesh-coordinators` so examples keep env values beside named
+  instances while the module handles broker discovery and separate value
+  resources. Include state moves from the existing flat coordinator resources.
+
 - Replace the staged deployment shell driver with `phala_cvm_env` resources.
   Allocate coordinator identities, derive broker URLs, and configure values
   in one ordinary apply, without targeted phases or a generated roster file.

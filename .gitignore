@@ -18,6 +18,7 @@ workloads/webdemo/webdemo
 
 # Terraform local state. Keep .terraform.lock.hcl tracked.
 clusters/*/.terraform/
+modules/**/.terraform/
 clusters/*/terraform.tfstate*
 clusters/*/terraform.tfvars
 clusters/*/signaling.auto.tfvars.json

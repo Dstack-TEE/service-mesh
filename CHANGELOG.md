@@ -54,6 +54,13 @@ This changelog tracks `service-mesh` releases.
 
 ### Documentation
 
+- Added kernel-checked Lean proofs of unbounded signaling-state convergence
+  and candidate dissemination, with explicit failure/timing premises and
+  executable NAT-expiry counterexamples.
+
+- Added runnable TLA+ protocol models, bounded verification results, and
+  counterexample checks for signaling, handshake coordination, attempt ownership,
+  candidate replay, and admission, plus initial composed recovery safety checks.
 - Added this changelog and changelog maintenance instructions.
 - Added the starter architecture SVG and updated the HA Postgres SVG.
 - Updated attestation and publishing docs for deterministic compose

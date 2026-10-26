@@ -4,7 +4,7 @@
 
 # Local run artifacts
 .local/
-snapshots/
+/snapshots/
 .env
 
 # Compiled Go binaries
@@ -28,3 +28,8 @@ clusters/*/*.bak
 
 # Legacy local state after moving the demo cluster to clusters/patroni-demo.
 cluster-example/
+
+# Formal verification caches; protocol/snapshots contains checked-in models.
+protocol/**/__pycache__/
+protocol/**/*.olean
+protocol/**/states/

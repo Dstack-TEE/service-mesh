@@ -1,0 +1,65 @@
+theory SignalingAuth
+begin
+
+/* Ideal domain-separated KDF and MAC. There are no equations that extract
+   a key from a derived key or MAC. This is a symbolic primitive assumption. */
+functions: derive/4, mac/2
+
+rule ProvisionCluster:
+  [ Fr(~cluster), Fr(~root), Fr(~alice), Fr(~bob) ]
+  --[ ClusterProvisioned(~cluster, ~root) ]->
+  [ !Bootstrap(~cluster, ~root), !Member(~cluster, ~alice),
+    !Member(~cluster, ~bob), Out(<~cluster, ~alice, ~bob>) ]
+
+rule Publish:
+  [ !Bootstrap(cluster, root), !Member(cluster, peer), In(body) ]
+  --[ Published(cluster, peer, body) ]->
+  [ Out(<cluster, peer, body,
+          mac(body, derive(root, cluster, peer, 'record'))>) ]
+
+rule Accept:
+  [ !Bootstrap(cluster, root), !Member(cluster, peer),
+    In(<cluster, peer, body,
+         mac(body, derive(root, cluster, peer, 'record'))>) ]
+  --[ Accepted(cluster, peer, body) ]-> []
+
+/* A gateway or bearer-token observer learns an access key, not the root. */
+rule LeakAccessToken:
+  [ !Bootstrap(cluster, root), !Member(cluster, peer) ]
+  --[ AccessLeaked(cluster, peer) ]->
+  [ Out(derive(root, cluster, peer, 'access')) ]
+
+/* Every provisioned member holds the bootstrap root. Compromising any one
+   member discloses the derivation material for all members in that cluster. */
+rule CompromiseMember:
+  [ !Bootstrap(cluster, root), !Member(cluster, peer) ]
+  --[ MemberCompromised(cluster, peer), RootExposed(cluster) ]->
+  [ Out(root) ]
+
+lemma record_authentic_unless_root_exposed:
+  "All cluster peer body #i.
+     Accepted(cluster, peer, body) @ i
+     ==> ((Ex #p. Published(cluster, peer, body) @ p & p < i)
+          | (Ex #r. RootExposed(cluster) @ r & r < i))"
+
+lemma access_token_does_not_reveal_record_key:
+  "All cluster peer root #p #i.
+     ClusterProvisioned(cluster, root) @ p
+     & K(derive(root, cluster, peer, 'record')) @ i
+     ==> (Ex #r. RootExposed(cluster) @ r & r < i)"
+
+lemma publication_reachable:
+  exists-trace
+  "Ex cluster peer body #p #a.
+     Published(cluster, peer, body) @ p
+     & Accepted(cluster, peer, body) @ a & p < a
+     & not (Ex #r. RootExposed(cluster) @ r)"
+
+/* This stronger goal is false for the current shared-root protocol. */
+lemma individual_authentication_despite_other_member_compromise:
+  "All cluster peer body #i.
+     Accepted(cluster, peer, body) @ i
+     & not (Ex #c. MemberCompromised(cluster, peer) @ c)
+     ==> (Ex #p. Published(cluster, peer, body) @ p & p < i)"
+
+end

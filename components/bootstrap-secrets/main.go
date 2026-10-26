@@ -284,10 +284,10 @@ func mustEnv(k string) string {
 //   - a slot whose value is already this InstanceID (we're rejoining), or
 //   - the lowest empty slot (CAS-claim it).
 //
-// First match wins. Returns the slot index. Slot ownership is
-// permanent for the InstanceID's lifetime; cleanup of stale slots
-// (when an instance is permanently retired) is a separate operator
-// task — see the example README.
+// First match wins. Returns the slot index. Ownership records are permanent:
+// deletion or reassignment is unsupported, even after an instance retires,
+// because its outstanding CAS requests may still commit. Safe reuse requires
+// a separate protocol that fences both old owners and outstanding requests.
 func claimOrdinal(cfg *Config, instanceID string) (int, error) {
 	if cfg.ConsulHTTPAddr == "" {
 		return 0, fmt.Errorf("CONSUL_HTTP_ADDR required for non-coordinator role")
@@ -303,46 +303,39 @@ func claimOrdinal(cfg *Config, instanceID string) (int, error) {
 
 	keyPrefix := fmt.Sprintf("cluster/%s/slots", cfg.ClusterName)
 
-	// Retry the whole walk a few times — pollLoop racing with peers
-	// could cause CAS misses; on a miss, try the next slot or restart
-	// the walk.
-	for attempt := 0; attempt < 20; attempt++ {
-		for i := 0; i < cfg.ExpectedReplicas; i++ {
-			key := fmt.Sprintf("%s/%d", keyPrefix, i)
-			existing, _, err := kv.Get(key, nil)
+	for i := 0; i < cfg.ExpectedReplicas; i++ {
+		key := fmt.Sprintf("%s/%d", keyPrefix, i)
+		for {
+			existing, _, err := kv.Get(key, &consulapi.QueryOptions{RequireConsistent: true})
 			if err != nil {
 				return 0, fmt.Errorf("kv get %s: %w", key, err)
 			}
-			switch {
-			case existing != nil && string(existing.Value) == instanceID:
-				log.Printf("rejoining slot %d (already owned)", i)
-				return i, nil
-			case existing == nil:
-				ok, _, err := kv.CAS(&consulapi.KVPair{
-					Key:         key,
-					Value:       []byte(instanceID),
-					ModifyIndex: 0,
-				}, nil)
-				if err != nil {
-					return 0, fmt.Errorf("kv cas %s: %w", key, err)
-				}
-				if ok {
-					log.Printf("claimed slot %d (fresh)", i)
+			if existing != nil {
+				if string(existing.Value) == instanceID {
+					log.Printf("rejoining slot %d (already owned)", i)
 					return i, nil
 				}
-				// CAS lost the race; some other peer claimed
-				// this slot first. Try the next slot.
-			default:
-				// owned by another instance; skip
+				// Only observing another owner permits advancing the scan.
+				break
 			}
+			ok, _, err := kv.CAS(&consulapi.KVPair{
+				Key:         key,
+				Value:       []byte(instanceID),
+				ModifyIndex: 0,
+			}, nil)
+			if err != nil {
+				return 0, fmt.Errorf("kv cas %s: %w", key, err)
+			}
+			if ok {
+				log.Printf("claimed slot %d (fresh)", i)
+				return i, nil
+			}
+			// A delayed request from our own previous incarnation may
+			// have claimed this slot. Reread it before deciding whether
+			// to rejoin or advance; CAS failure alone cannot tell us.
 		}
-		// Exhausted slots without claiming or rejoining; either the
-		// cluster is over-replicated or there's a stale slot. Sleep
-		// briefly and retry — gives a slot a chance to clear if a
-		// peer is in transient state.
-		time.Sleep(2 * time.Second)
 	}
-	return 0, fmt.Errorf("no available slot in cluster %q (max=%d) — cluster over-replicated or has stale slots",
+	return 0, fmt.Errorf("no available slot in cluster %q (max=%d); dynamic slot ownership is permanent",
 		cfg.ClusterName, cfg.ExpectedReplicas)
 }
 

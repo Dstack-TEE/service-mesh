@@ -7,6 +7,7 @@ on:
       - 'components/mesh-conn/**'
       - 'components/admission-broker/**'
       - 'components/admission-client/**'
+      - 'components/bootstrap-secrets/**'
       - '.github/workflows/protocol.yml'
   push:
     branches: [main]
@@ -15,6 +16,7 @@ on:
       - 'components/mesh-conn/**'
       - 'components/admission-broker/**'
       - 'components/admission-client/**'
+      - 'components/bootstrap-secrets/**'
       - '.github/workflows/protocol.yml'
   workflow_dispatch:
 
@@ -22,6 +24,42 @@ permissions:
   contents: read
 
 jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: components/bootstrap-secrets
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: components/bootstrap-secrets/go.mod
+          cache-dependency-path: components/bootstrap-secrets/go.sum
+      - name: Check allocator regressions and concurrent claims
+        run: go test -race ./...
+      - name: Vet bootstrap secrets
+        run: go vet ./...
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check symbolic security properties and expected attacks
+        run: python3 protocol/security/check.py
+      - name: Save symbolic security evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-security-checks
+          path: .local/protocol-security/
+          include-hidden-files: true
+          if-no-files-found: warn
+
   tlc:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -53,7 +91,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Check unbounded signaling proof and all axiom dependencies
+      - name: Check protocol proofs and all axiom dependencies
         run: python3 protocol/proof/check.py
       - name: Save Lean evidence
         if: always()

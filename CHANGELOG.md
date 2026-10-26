@@ -6,6 +6,11 @@ This changelog tracks `service-mesh` releases.
 
 ### Changed
 
+- Model Cloud API read retries, quota waits, cancellation, and deployment
+  deadlines, including controls that reproduce failure without client retries.
+  Link the shared retry contract tested by Go, JavaScript, and both Python clients.
+  Pin the library-backed SDK adapters using backoff, Ky, and Tenacity.
+
 - Add `modules/mesh-coordinators` so examples keep env values beside named
   instances while the module handles broker discovery and separate value
   resources. Include state moves from the existing flat coordinator resources.
@@ -47,6 +52,10 @@ This changelog tracks `service-mesh` releases.
 
 ### Security
 
+- Fixed dynamic slot allocation to reread a slot after failed CAS, preventing
+  delayed requests across restarts from assigning one instance two slots.
+  Use consistent reads and report exhausted permanent slots without waiting
+  for unsafe deletion; slot reuse remains unsupported.
 - Patroni passwords now come from in-TEE derivation, not Terraform
   state.
 - Validated the experimental KMS key-provider setting on AMD SEV-SNP so
@@ -60,6 +69,12 @@ This changelog tracks `service-mesh` releases.
 
 ### Documentation
 
+- Added kernel-checked admission-policy selection and scope proofs, including
+  wildcard precedence and optional measurement pins; extended admission models
+  to brokers sharing a platform authority and added slot-lifecycle traces.
+- Added unbounded symbolic admission and signaling-authentication checks,
+  expected attack traces, and a protocol security roadmap that makes
+  shared-key, instance-identity, and token-channel assumptions explicit.
 - Added kernel-checked Lean proofs of unbounded signaling-state convergence
   and candidate dissemination, with explicit failure/timing premises and
   executable NAT-expiry counterexamples.

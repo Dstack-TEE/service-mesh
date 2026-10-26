@@ -10,13 +10,10 @@ coordinator_replicas = 1
 api_replicas         = 1
 worker_replicas      = 1
 
-# Public demo connection-bootstrap endpoint. It is open for first-run
-# testing and does not relay application traffic. Leave
-# external_turn_secret empty unless you are intentionally using a
-# self-hosted relay fallback.
-external_coordinator_host = "155.138.146.255"
-external_signaling_url    = "http://155.138.146.255:7000"
-external_turn_secret      = ""
+# Default STUN provider; replace with your own public STUN endpoint(s).
+stun_urls = ["stun:stun.cloudflare.com:3478"]
+# Broker URLs are derived automatically in the Terraform graph.
+# No separate server, relay credentials, or Cloudflare account is required.
 
 # Attestation admission is enabled by default. The Consul ACL management
 # token is derived in-TEE on the coordinators (bootstrap-secrets); it is

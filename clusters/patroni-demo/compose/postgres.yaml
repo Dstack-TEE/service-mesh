@@ -7,7 +7,7 @@
 
 services:
   sidecar:
-    image: ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest
+    image: h4x3rotab/dstack-service-mesh@sha256:1f91313e33ccda7b3182f7c0b646342756777911078de9c13c890bd6a335fd2e
     network_mode: host
     restart: on-failure
     cap_add:
@@ -21,9 +21,8 @@ services:
       - MESH_ROUTES_JSON=${MESH_ROUTES_JSON}
       - LOCAL_BACKENDS_JSON=${LOCAL_BACKENDS_JSON}
       - COORDINATOR_VIPS=${COORDINATOR_VIPS}
-      - SIGNALING_URL=${SIGNALING_URL}
-      - TURN_HOST=${TURN_HOST}
-      - TURN_SHARED_SECRET=${TURN_SHARED_SECRET}
+      - SIGNALING_URLS_JSON=${SIGNALING_URLS_JSON}
+      - STUN_URLS_JSON=${STUN_URLS_JSON}
       - GOSSIP_KEY=${GOSSIP_KEY}
       - ADMISSION_BROKER_ENABLE=${ADMISSION_BROKER_ENABLE:-}
       - MESH_CONN_DEBUG_ICE=${MESH_CONN_DEBUG_ICE:-}
@@ -46,7 +45,7 @@ services:
       start_period: 5s
 
   patroni:
-    image: ghcr.io/dstack-tee/service-mesh/patroni:latest
+    image: ghcr.io/dstack-tee/service-mesh/patroni@sha256:6523dd26fa9da1b8bbf2b04021979f04c8a33b7947d26359751e60dc6d69961d
     network_mode: host
     restart: on-failure
     environment:

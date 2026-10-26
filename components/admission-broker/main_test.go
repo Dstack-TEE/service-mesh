@@ -269,8 +269,8 @@ func TestAttestFlow(t *testing.T) {
 	if attest.ConsulACLToken != "secret-token" || attest.WorkloadID != "demo/worker/0/webdemo" || attest.PolicyEpoch != 7 {
 		t.Fatalf("bad response: %+v", attest)
 	}
-	if verifierSaw.Quote != "aabbcc" {
-		t.Fatalf("verifier did not receive quote: %+v", verifierSaw)
+	if verifierSaw.Attestation == nil || *verifierSaw.Attestation != "aabbcc" || verifierSaw.Quote != "" {
+		t.Fatalf("verifier did not receive attestation: %+v", verifierSaw)
 	}
 	if issuer.req.ConsulService != "webdemo" {
 		t.Fatalf("wrong consul service: %s", issuer.req.ConsulService)

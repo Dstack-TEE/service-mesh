@@ -18,7 +18,7 @@ do we do about it?", and lands on a prioritised punch list.
                          Consul infra ports, 3-byte stream header
   Layer 1   transport    pion/ice + QUIC: punched UDP path,
                          stream multiplex, flow control, keepalive
-  Layer 0   bootstrap    coturn + signalling broker on a public box;
+  Layer 0   bootstrap    public STUN + leaderless coordinator brokers;
                          dstack CVMs behind a provider NAT
 ```
 
@@ -36,49 +36,32 @@ clever-and-ours bits are the peer-VIP plane and the 3-byte stream
 header. Both are simple enough to audit, but exactly because they're
 ours, they're the parts that *must* be made robust by hand.
 
-## Layer 0 — NAT traversal bootstrap infra
+## Layer 0 — NAT traversal bootstrap infrastructure
 
-### What's there
+Each existing coordinator CVM runs an independent, authenticated snapshot
+broker. Public STUN discovers addresses. The mesh has no TURN relay path.
 
-- one public-IP host running STUN and a Go HTTP signalling broker; a
-  self-hosted coordinator may also enable TURN relay fallback
-- the dstack CVMs themselves, which sit behind Phala's provider NAT
+| Failure | Effect | Recovery |
+| --- | --- | --- |
+| One broker fails | Peers continue through any commonly reachable broker. Existing direct links are unaffected. | Independent workers keep refreshing every endpoint. |
+| All brokers fail | New handshakes wait; established links between surviving peers remain up. | Restored brokers reconstruct state from periodic full snapshots. |
+| Broker response is lost | No drained message queue is lost. | Next sync reads the same or a newer snapshot. |
+| Peer and broker restart | Old versions may remain at other brokers or peers. | Lamport clock recovery and explicit offer/answer IDs converge on fresh state. |
+| Direct NAT traversal is impossible | The pair cannot connect. | Fix networking; no automatic relay is permitted. |
+| Cluster bootstrap key leaks | An attacker can impersonate cluster peers for signaling and gossip. | Rotate the key and protect Terraform state. Attestation admission remains separate. |
 
-### What can break
-
-| failure                           | impact                                                                | recovery |
-| ---                               | ---                                                                   | ---      |
-| Coordinator host dies             | New peers can't bootstrap. **Existing ICE pairs keep working** (no data flows through this box once handshake is done). New retries from existing peers fail until it's back. | bring it back; peers reconnect on their own. |
-| Coordinator firewall / network change | Same as above.                                                    | restore the signaling and STUN ports; if self-hosted TURN is enabled, also restore the TURN relay port range. |
-| TURN shared secret leaks          | Applies only when self-hosted TURN is enabled. Anyone with the secret can use that box as a relay. | rotate `TURN_SHARED_SECRET` in coordinator + every CVM env, redeploy. |
-| Signalling broker is unauthenticated | Any external actor can publish/poll messages, spoof candidates, intercept ICE handshakes. Currently low-impact only because we're solo. | gate `/publish` + `/poll` on attestation-derived identity. |
-| dstack provider NAT changes type (e.g. cone to symmetric) | With the public STUN-only demo endpoint, direct connection may fail instead of relaying. With self-hosted TURN enabled, ICE can pick the relay path. | use self-hosted TURN or a future credentialed relay service for environments that need relay fallback. |
-| Underlying CVM dies               | That peer's services drop out. Consul will mark it `failed` after gossip timeout, Envoy LB removes it within seconds. | redeploy; the rest of the cluster is unaffected. |
-
-### Risk shape
-
-Coordinator host is a **single point of failure for NEW joins**. If
-self-hosted TURN is enabled, it is also a SPOF for the relay fallback
-path. It is **NOT a SPOF for established direct traffic**.
-
-### Recommended fixes
-
-1. **Run two coordinators in different ASes**, give peers both URLs
-   in `SIGNALING_URL` / `TURN_HOST` (pion supports a list). One dies
-   → other still serves.
-2. **Treat coordinator as untrusted transport.** That's already the
-   posture for the data path (Envoy mTLS protects payloads), so
-   compromise of a coordinator just leaks metadata. The thing that's
-   *not* covered today is signalling-message spoofing — should add
-   AppAuth-rooted signatures on `auth` + `candidate` messages so a
-   compromised broker can't impersonate a peer.
+No Consul election is used for signaling, avoiding a cold-start dependency
+cycle. Two-stage provisioning distributes instance-pinned broker URLs after
+coordinator creation. Re-run the deployment driver after coordinator
+replacement or scaling. See [signaling](signaling.md) for protocol details
+and security/resource limits.
 
 ## Layer 1 — pion/ice + QUIC
 
 ### What's there
 
 - one ICE connection per peer-pair (15 in the default 6-CVM cluster),
-  established via signalling broker + coturn
+  established via coordinator brokers + public STUN
 - one `QUIC.Session` per ICE conn, with `EnableKeepAlive=true`
 - the streams flowing inside (one long-lived UDP-per-port,
   on-demand TCP-per-conn)
@@ -87,7 +70,7 @@ path. It is **NOT a SPOF for established direct traffic**.
 
 | failure                               | impact                                                                | recovery |
 | ---                                   | ---                                                                   | ---      |
-| ICE conn drops (NAT timeout, route change, peer reboot) | QUIC session ends. All streams over it break. Pumps return errors. | mesh-conn's `runPeerLink` catches the error and re-runs `dialAndPump` after a 5s sleep. |
+| ICE conn drops (NAT timeout, route change, peer reboot) | QUIC session ends. All streams over it break. Pumps return errors. | mesh-conn's `runPeerLink` catches the error and re-runs `dialAndPump` after a 2s retry interval. |
 | ICE state stalls without dropping (pion bug) | Streams hang. QUIC keep-alive ping eventually fails → session ends → restart loop kicks in. | automatic via keep-alive timeout. |
 | `pion/ice` panics                     | Whole mesh-conn process crashes; Docker restart policy `on-failure` brings it back. | automatic; ICE re-handshakes on next start. |
 | QUIC session can't be created (handshake mismatch) | mesh-conn errors out, retry loop. | automatic. |
@@ -104,61 +87,15 @@ path. It is **NOT a SPOF for established direct traffic**.
 2. **Tune QUIC `MaxStreamWindowSize`** if we ever need higher
    throughput; default is 256 KB which is fine for now.
 
-### Already shipped
+### Handshake recovery
 
-- **Auth-channel reconnect path is clean.** Each `dialICE` call
-  installs a fresh `peerSession{}` (fresh `authCh`) via
-  `installSession()` and atomically swaps `sessions[remoteID]`, so
-  any auth that was delivered to a prior failed attempt is left
-  unreferenced. `pollLoop` does drain-then-push on the auth channel,
-  so the channel always holds the *latest* auth and `dialICE`
-  can't consume a stale ufrag/pwd from before the peer's last
-  bounce. Verified by inspection of `components/mesh-conn/main.go:817-822` and
-  `:1006-1016`; the original bug described in earlier revisions of
-  this doc is closed.
-
-- **Staggered peer startup is a liveness wait, not a failed ICE
-  attempt.** A real Phala deployment can start one CVM more than 60 s
-  before its peer. Before both sides have exchanged ICE auth, there is
-  no connectivity check in progress and retrying the local agent only
-  republishes equivalent local credentials. `dialICE` now requires the
-  local auth publish to succeed, then waits for the first remote auth
-  until the process context is cancelled, logging the wait every 60 s.
-  Once remote auth is available, the existing Dial/Accept failure path
-  and `FailedTimeout` still bound real ICE failures.
-
-- **ICE auth-race convergence.** When two peers handshake in near-
-  simultaneous restart (the normal startup case on a fresh cluster
-  or after a redeploy), the supersession check in `pollLoop` —
-  "fresh peer auth aborts the in-flight dial against a now-stale
-  consumed value" — used to fire symmetrically on both sides, and
-  every aborted attempt's retry rebuilt the `ice.Agent` (mandatory
-  because pion's `Restart()` doesn't support re-`Dial`; see
-  `peerSession` docstring), which republished a fresh auth, which
-  re-superseded the peer's next attempt, ad infinitum. Observed on
-  2026-05-13 as workload↔coordinator and workload↔workload pairs flapping
-  for 7+ minutes per pair, blocking Patroni replica `pg_basebackup`
-  (replicas' local Envoys had no endpoint for `postgres-master`).
-
-  Fixed with two coupled changes in `runPeerLink` and `pollLoop`:
-  asymmetric retry back-off (lex-smaller peer waits 2 s, larger
-  waits 5 s — see `retryBackoff` in `components/mesh-conn/main.go`) and a
-  3-second grace window on the supersession check (`supersedeGrace`)
-  so an in-flight handshake gets a fair chance to converge before a
-  peer-side credential roll can abort it. The pair composes: the
-  back-off asymmetry guarantees one side's retry is the
-  authoritative auth publisher per cycle; the grace window absorbs
-  early-race noise that otherwise re-enters the supersede loop
-  before either retry can settle.
-
-  Regression net: `components/mesh-conn/main_test.go::TestAuthRaceConvergence`
-  is a deterministic in-process loopback harness that forges a
-  fresh-auth from the peer while a real handshake is in flight.
-  Before the fix, the test fails 32/33 of 33 trials (the survivor
-  was a "link came up before forge arrived" race in the original
-  single-shot variant). After the fix it passes 50/50 with the
-  sustained-forge variant gated on the `onAttemptStarted` hook,
-  which guarantees the forge lands inside the in-flight window.
+The lower peer ID initiates an offer. Answers echo that exact offer ID,
+and complete candidate snapshots belong to their credentials. Independent
+brokers feed the same per-pair ICE agent. Duplicate snapshots do not reset
+candidate state, and stale answers cannot supersede a new offer. Peer
+session changes explicitly cancel superseded attempts; no grace window or
+asymmetric retry timing is used. Tests cover restarts, missing brokers,
+reordered versions, and stale/duplicate deliveries.
 
 - **pion DisconnectedTimeout / FailedTimeout headroom.** With pion's
   defaults (5 s + 25 s = 30 s of no inbound from the selected pair

@@ -126,16 +126,15 @@ variable "os_image" {
   description = "Optional Phala base OS image slug. Required when production_profile is true so the launch config and admission policy share the same explicit OS root."
 }
 
-# External coordinator (public-IP coturn + signaling host). Used until
-# Phala enables UDP ingress on dstack apps; once that lands we can host
-# coturn + signaling inside the dstack mesh and drop these external_*
-# vars.
-variable "external_coordinator_host" { type = string }
-variable "external_signaling_url" { type = string }
-variable "external_turn_secret" {
-  type      = string
-  default   = ""
-  sensitive = true
+# Broker URLs are derived from allocated coordinator identities below.
+variable "stun_urls" {
+  type        = list(string)
+  default     = ["stun:stun.cloudflare.com:3478"]
+  description = "STUN endpoints for direct ICE traversal. TURN URLs are not supported."
+  validation {
+    condition     = alltrue([for endpoint in var.stun_urls : can(regex("^stun:[^/?#]+$", endpoint))])
+    error_message = "stun_urls must contain STUN URLs, never TURN URLs."
+  }
 }
 
 # Set to "1" to enable pion's verbose ICE debug logs (connectivity
@@ -170,6 +169,8 @@ variable "admission_expected_kms_public_key" {
 # ---------- Cluster topology + VIP allocation ----------
 
 locals {
+  signaling_urls = module.coordinators.signaling_urls
+
   launch_os_image = trimspace(var.os_image) == "" ? null : trimspace(var.os_image)
 
   mesh_service_default_permissions = {
@@ -230,7 +231,6 @@ locals {
 
   workload_group_names = sort(keys(local.workload_groups))
 
-  coordinator_compose = yamldecode(file("${path.module}/compose/coordinator.yaml"))
   workload_compose_by_group = {
     for group in local.workload_group_names :
     group => yamldecode(file(local.workload_groups[group].compose))
@@ -375,10 +375,9 @@ locals {
     for p in local.coordinator_peers : p.slot_name => p.ordinal
   }
 
-  # Per-slot env, keyed by slot name (matches `members` entries).
-  # `phala_app.env` (bootstrap CVM) reads from this for `members[0]`;
-  # `phala_app_instance.env` reads from it for each non-bootstrap slot.
-  coordinator_preflight_env = {
+  # Runtime values are colocated with each named slot at the module boundary.
+  # The module injects SIGNALING_URLS_JSON after allocating broker identities.
+  coordinator_env_by_slot = {
     for slot_name, ordinal in local.coordinator_ordinals : slot_name => {
       CLUSTER_NAME            = var.cluster_name
       PEERS_JSON              = local.peers_json
@@ -386,17 +385,11 @@ locals {
       COORDINATOR_ORDINAL     = tostring(ordinal)
       BOOTSTRAP_EXPECT        = tostring(var.coordinator_replicas)
       COORDINATOR_VIPS        = local.coordinator_vips
-      SIGNALING_URL           = var.external_signaling_url
-      TURN_HOST               = var.external_coordinator_host
-      TURN_SHARED_SECRET      = var.external_turn_secret
+      STUN_URLS_JSON          = jsonencode(var.stun_urls)
       GOSSIP_KEY              = random_bytes.gossip_key.base64
       MESH_CONN_DEBUG_ICE     = var.mesh_conn_debug_ice
       ADMISSION_BROKER_ENABLE = var.enable_attestation_admission ? "1" : ""
-      # The env key is part of the compose allowlist, but the policy
-      # value is not measured. Keep preflight acyclic by hashing with
-      # the same key present and an empty value; the deployed resource
-      # receives the generated policy JSON below.
-      ADMISSION_POLICY_JSON = ""
+      ADMISSION_POLICY_JSON   = local.admission_policy_json
     }
   }
 
@@ -411,9 +404,8 @@ locals {
         MESH_ROUTES_JSON        = local.mesh_routes_json
         LOCAL_BACKENDS_JSON     = local.local_backends_json_by_group[slot.group]
         COORDINATOR_VIPS        = local.coordinator_vips
-        SIGNALING_URL           = var.external_signaling_url
-        TURN_HOST               = var.external_coordinator_host
-        TURN_SHARED_SECRET      = var.external_turn_secret
+        SIGNALING_URLS_JSON     = "[]"
+        STUN_URLS_JSON          = jsonencode(var.stun_urls)
         GOSSIP_KEY              = random_bytes.gossip_key.base64
         MESH_CONN_DEBUG_ICE     = var.mesh_conn_debug_ice
         ADMISSION_BROKER_ENABLE = var.enable_attestation_admission ? "1" : ""
@@ -497,13 +489,11 @@ locals {
     workloads = local.admission_workloads
   })
 
-  coordinator_env_by_slot = {
-    for slot_name, env in local.coordinator_preflight_env : slot_name => merge(env, {
-      ADMISSION_POLICY_JSON = local.admission_policy_json
+  workload_env_by_slot = {
+    for slot_name, env in local.workload_preflight_env_by_slot : slot_name => merge(env, {
+      SIGNALING_URLS_JSON = jsonencode(local.signaling_urls)
     })
   }
-
-  workload_env_by_slot = local.workload_preflight_env_by_slot
 }
 
 # ---------- Workload preflight (group revision evidence) ----------
@@ -526,45 +516,8 @@ resource "phala_app_preflight" "workload" {
   listed         = false
   public_logs    = true
   public_sysinfo = false
-}
-
-# ---------- Coordinator app + slots ----------
-#
-# Single `phala_app.coordinator` owns the coordinator replica set's app
-# identity and the bootstrap CVM. The other coordinator slots are
-# declared as `phala_app_instance.coordinator` entries; each carries its
-# own per-slot env so bootstrap-secrets sees the right
-# COORDINATOR_ORDINAL on every peer.
-
-resource "phala_app" "coordinator" {
-  name    = local.coordinator_members[0]
-  members = local.coordinator_members
-
-  size           = "tdx.small"
-  region         = "US-WEST-1"
-  image          = local.launch_os_image
-  kms            = var.kms
-  disk_size      = 20
-  storage_fs     = "zfs" # MUST pin (terraform-provider-phala#5)
-  docker_compose = file("${path.module}/compose/coordinator.yaml")
-
-  env = local.coordinator_env_by_slot[local.coordinator_members[0]]
-
-  listed         = false
-  public_logs    = true
-  public_sysinfo = false
-
-  wait_for_ready       = true
-  wait_timeout_seconds = 600
 
   lifecycle {
-    precondition {
-      condition = alltrue([
-        for service_name, service in local.coordinator_compose.services :
-        !can(regex("\\$\\{", coalesce(try(tostring(service.image), null), "")))
-      ])
-      error_message = "Coordinator compose service images must be literal strings. Edit the compose file to change images."
-    }
     precondition {
       condition     = !var.enable_attestation_admission || var.admission_expected_kms_public_key != ""
       error_message = "admission_expected_kms_public_key must be set when enable_attestation_admission is true."
@@ -576,29 +529,44 @@ resource "phala_app" "coordinator" {
   }
 }
 
-resource "phala_app_instance" "coordinator" {
-  for_each = toset(phala_app.coordinator.members)
+# ---------- Coordinator group ----------
 
-  app_id = phala_app.coordinator.app_id
-  name   = each.value
+module "coordinators" {
+  source = "../../modules/mesh-coordinators"
 
-  # Bootstrap slot is adopted from phala_app.coordinator; its env lives
-  # on phala_app.coordinator.env. Provider rejects env on the adopted
-  # slot, so we pass null there.
-  env = each.value == phala_app.coordinator.name ? null : local.coordinator_env_by_slot[each.value]
+  bootstrap_name = local.coordinator_members[0]
+  docker_compose = file("${path.module}/compose/coordinator.yaml")
+  image          = local.launch_os_image
+  kms            = var.kms
 
-  wait_for_ready       = true
-  wait_timeout_seconds = 600
+  instances = {
+    for name in local.coordinator_members : name => {
+      env = local.coordinator_env_by_slot[name]
+    }
+  }
+}
+
+moved {
+  from = phala_app.coordinator
+  to   = module.coordinators.phala_app.this
+}
+
+moved {
+  from = phala_app_instance.coordinator
+  to   = module.coordinators.phala_app_instance.this
+}
+
+moved {
+  from = phala_cvm_env.coordinator
+  to   = module.coordinators.phala_cvm_env.this
 }
 
 # ---------- Workload apps + slots ----------
 #
-# Workload groups depend on the full coordinator quorum: each workload
-# Consul client retry-joins the coordinator serf addrs immediately on
-# boot, so applying workloads before all coordinator slots are up just
-# generates noise. The explicit `depends_on` on the collective
-# `phala_app_instance.coordinator` gates workloads behind every
-# coordinator slot, not just the bootstrap one.
+# Identity allocation has already provided the brokers' endpoint roster.
+# Workloads can boot while coordinator environments update. Admission and
+# Consul startup wait for their infrastructure at runtime; a Terraform quorum
+# barrier would serialize independent CVM boots without adding a data dependency.
 
 resource "phala_app" "workload" {
   for_each = local.workload_groups
@@ -616,14 +584,20 @@ resource "phala_app" "workload" {
 
   env = local.workload_env_by_slot[local.workload_bootstrap_slot_name[each.key]]
 
+  env_update_scope = "bootstrap"
+
   listed         = false
   public_logs    = true
   public_sysinfo = false
 
-  wait_for_ready       = true
+  wait_for_ready       = false
   wait_timeout_seconds = 600
 
   lifecycle {
+    precondition {
+      condition     = length(local.signaling_urls) > 0
+      error_message = "At least one coordinator signaling endpoint is required."
+    }
     precondition {
       condition = alltrue(flatten([
         for group in local.workload_group_names : [
@@ -670,7 +644,6 @@ resource "phala_app" "workload" {
     }
   }
 
-  depends_on = [phala_app_instance.coordinator]
 }
 
 resource "phala_app_instance" "workload" {
@@ -687,7 +660,7 @@ resource "phala_app_instance" "workload" {
 
 # ---------- Outputs ----------
 
-output "coordinator_app_id" { value = phala_app.coordinator.app_id }
+output "coordinator_app_id" { value = module.coordinators.app_id }
 
 output "workload_app_ids" {
   description = "Map of workload group name -> Phala app id."
@@ -700,7 +673,7 @@ output "worker_app_id" { value = phala_app.workload["worker"].app_id }
 
 output "coordinator_slot_uuids" {
   description = "Map of stable coordinator slot name -> current vm_uuid. The slot name is durable; vm_uuid may change on CVM replacement."
-  value       = { for k, s in phala_app_instance.coordinator : k => s.vm_uuid }
+  value       = module.coordinators.slot_uuids
 }
 
 output "workload_slot_uuids" {
@@ -717,10 +690,15 @@ output "workload_preflight_compose_hashes" {
 output "consul_ui" {
   # Coordinator-0's Consul HTTP API on the canonical 8500. Plain HTTP
   # backend -> use the no-`s` gateway form (gateway terminates TLS).
-  value = "https://${trimprefix(phala_app.coordinator.app_id, "app_")}-8500.${phala_app.coordinator.gateway_base_domain}/ui"
+  value = "https://${trimprefix(module.coordinators.app_id, "app_")}-8500.${module.coordinators.gateway_base_domain}/ui"
 }
 
 output "api_url" {
   description = "Public gateway URL for the starter API workload. Use /hello for the local API response and /worker to call the private worker through the mesh."
   value       = "https://${trimprefix(phala_app.workload["api"].app_id, "app_")}-8080.${phala_app.workload["api"].gateway_base_domain}"
+}
+
+output "coordinator_signaling_urls" {
+  description = "Instance-pinned broker endpoints for independent stores."
+  value       = local.signaling_urls
 }

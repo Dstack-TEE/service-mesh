@@ -15,14 +15,9 @@
 #                      started here — coordinators don't host any
 #                      Connect-mTLS workload.
 #
-# coturn + signaling that earlier coordinator templates carried have
-# been removed: the cluster uses an external public-IP coordinator for
-# both. See coordinator/docker-compose.yaml. It is configured into each
-# peer's mesh-conn via SIGNALING_URL / TURN_HOST / TURN_SHARED_SECRET.
-# The dstack-coordinator's local copies were never reachable from
-# outside (Phala dstack apps don't have UDP ingress yet), so they were
-# dead code burning CPU. When/if UDP ingress lands, re-adding them is
-# one small PR.
+# mesh-conn also serves an authenticated signaling snapshot store on
+# port 7000, independently of Consul quorum and mesh connectivity.
+# Peers exchange setup state through every coordinator; data stays direct.
 #
 # Per-CVM secrets policy: nothing on the persisted disk holds secret
 # material. /run/secrets/* is tmpfs (gone on reboot, re-derived on
@@ -31,7 +26,7 @@
 
 services:
   sidecar:
-    image: ghcr.io/dstack-tee/service-mesh/mesh-sidecar:latest
+    image: h4x3rotab/dstack-service-mesh@sha256:1f91313e33ccda7b3182f7c0b646342756777911078de9c13c890bd6a335fd2e
     network_mode: host
     restart: on-failure
     # NET_ADMIN: required for `ip addr add 127.50.0.<n>/32 dev lo` at
@@ -55,12 +50,10 @@ services:
       # Comma-separated VIPs of all coordinators — entrypoint uses these
       # for retry-join (skipping self).
       - COORDINATOR_VIPS=${COORDINATOR_VIPS}
-      # External coordinator path: coordinator mesh-conn uses the same
-      # public bootstrap endpoint that workload CVMs do, so peer-pair NAT
-      # traversal setup happens in a single shared place.
-      - SIGNALING_URL=${SIGNALING_URL}
-      - TURN_HOST=${TURN_HOST}
-      - TURN_SHARED_SECRET=${TURN_SHARED_SECRET}
+      # Independent coordinator signaling endpoints.
+      - SIGNALING_URLS_JSON=${SIGNALING_URLS_JSON}
+      - STUN_URLS_JSON=${STUN_URLS_JSON}
+      - SIGNALING_LISTEN=:7000
       # WORKAROUND: gossip key generated in Terraform and broadcast
       # identically to every CVM. See cluster.tf.
       - GOSSIP_KEY=${GOSSIP_KEY}
@@ -83,7 +76,7 @@ services:
       start_period: 5s
 
   dstack-verifier:
-    image: dstacktee/dstack-verifier:0.5.9
+    image: h4x3rotab/dstack-verifier@sha256:26a25f53ea9161ec26dd0072846be7d5c883b14e6b5c4ad94f05d6a311992dc6
     network_mode: host
     restart: on-failure
     volumes:

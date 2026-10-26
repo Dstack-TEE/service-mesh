@@ -2,10 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -14,102 +12,24 @@ import (
 )
 
 // =============================================================================
-// In-test signalling broker — minimal /publish + /poll implementation
-// matching signaling/main.go's wire format. Inlined rather than imported
-// because signaling/ is its own go.mod.
+// Tests use the production snapshot broker, not a second implementation.
 // =============================================================================
 
 type testBroker struct {
 	server *httptest.Server
-
-	mu     sync.Mutex
-	queues map[string][]Message
+	broker *signalBroker
 }
+
+var testSignalKey = make([]byte, 32)
 
 func newTestBroker() *testBroker {
-	b := &testBroker{queues: map[string][]Message{}}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/publish", b.handlePublish)
-	mux.HandleFunc("/poll", b.handlePoll)
-	b.server = httptest.NewServer(mux)
+	cfg := &Config{ClusterName: "test", SignalingKey: testSignalKey, Peers: twoPeers()}
+	b := &testBroker{broker: newSignalBroker(cfg)}
+	b.server = httptest.NewServer(b.broker)
 	return b
 }
-
 func (b *testBroker) URL() string { return b.server.URL }
 func (b *testBroker) Close()      { b.server.Close() }
-
-// push mirrors signaling/main.go: a new auth from a sender drops any
-// of that sender's prior messages from the recipient's queue. The
-// production broker relies on this to keep stale candidates from
-// being delivered after a peer rolls credentials; the test broker
-// must match because mesh-conn's pollLoop is calibrated against it.
-func (b *testBroker) push(to string, msg Message) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if msg.Type == "auth" {
-		kept := b.queues[to][:0]
-		for _, m := range b.queues[to] {
-			if m.From != msg.From {
-				kept = append(kept, m)
-			}
-		}
-		b.queues[to] = kept
-	}
-	b.queues[to] = append(b.queues[to], msg)
-}
-
-func (b *testBroker) drain(peer string) []Message {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	q := b.queues[peer]
-	delete(b.queues, peer)
-	return q
-}
-
-func (b *testBroker) handlePublish(w http.ResponseWriter, r *http.Request) {
-	to := r.URL.Query().Get("to")
-	if to == "" {
-		http.Error(w, "missing ?to=", http.StatusBadRequest)
-		return
-	}
-	var msg Message
-	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	b.push(to, msg)
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// handlePoll short-polls. mesh-conn's pollLoop hammers /poll in a tight
-// loop and re-enters on every empty reply — that's fine for a unit test
-// (a few hundred polls/sec on loopback is cheap). We sleep briefly to
-// avoid hot-spinning while waiting for the first message.
-func (b *testBroker) handlePoll(w http.ResponseWriter, r *http.Request) {
-	peer := r.URL.Query().Get("peer")
-	if peer == "" {
-		http.Error(w, "missing ?peer=", http.StatusBadRequest)
-		return
-	}
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if r.Context().Err() != nil {
-			return
-		}
-		b.mu.Lock()
-		if len(b.queues[peer]) > 0 {
-			msgs := b.queues[peer]
-			delete(b.queues, peer)
-			b.mu.Unlock()
-			_ = json.NewEncoder(w).Encode(msgs)
-			return
-		}
-		b.mu.Unlock()
-		time.Sleep(5 * time.Millisecond)
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte("[]\n"))
-}
 
 // =============================================================================
 // Test-peer factory: build a Mesh with onLinkUp hook + capture goroutines.
@@ -134,11 +54,13 @@ type testPeer struct {
 func newTestPeer(t *testing.T, brokerURL, selfID string, peers []Peer, allowlistPort int) *testPeer {
 	t.Helper()
 	cfg := &Config{
-		SelfID:       selfID,
-		Peers:        peers,
-		SignalingURL: brokerURL,
-		Allowlist:    []InfraPort{{Port: allowlistPort, UDP: false}},
-		// No TurnHost — ICE will use host candidates only, which is
+		SelfID:        selfID,
+		Peers:         peers,
+		SignalingURLs: []string{brokerURL},
+		ClusterName:   "test",
+		SignalingKey:  testSignalKey,
+		Allowlist:     []InfraPort{{Port: allowlistPort, UDP: false}},
+		// No STUN URLs — ICE will use host candidates only, which is
 		// what we want for a loopback test.
 	}
 	if err := validateConfig(cfg); err != nil {

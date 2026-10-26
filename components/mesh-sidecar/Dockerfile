@@ -4,6 +4,7 @@
 #   bootstrap-secrets  one-shot init, derives per-CVM secrets from the
 #                      dstack KMS and writes /run/instance/info.json
 #   mesh-conn          QUIC-on-pion/ICE userspace overlay
+#                      and leaderless signaling broker on coordinators
 #   consul             agent (server on coordinator CVMs, client on
 #                      workload CVMs)
 #   envoy              Connect mTLS data plane (workloads only)

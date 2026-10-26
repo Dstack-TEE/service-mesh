@@ -12,31 +12,23 @@ on any L3 path. Every CVM NATs out to the same public IP, so even a
 "direct" peer-to-peer flow is hairpinned by the provider edge. The
 only thing the CVMs share is outbound internet egress.
 
-Plus one public NAT traversal bootstrap endpoint running STUN and a tiny
-HTTP signaling broker. This is setup infrastructure only: once peers
-have ICE-handshaked, no data passes through it. A self-hosted
-coordinator can additionally enable TURN relay fallback, but the public
-demo service should leave TURN disabled.
+Each coordinator also runs an independent HTTPS signaling broker.
+Every peer publishes authenticated, expiring handshake snapshots to all
+coordinators. There is no signaling leader, broker quorum, or external
+server. Public STUN (Cloudflare by default, configurable) discovers NAT
+addresses; no TURN relay is supported.
 
-```
-                      coturn + signaling
-                      <external IP>
-                              ▲
-                outbound      │ STUN binding
-                UDP+TCP       │ ICE candidate exchange
-                              │
-        ┌─────────────────────┼─────────────────────────────────┐
-        │                     │                                 │
-   [coord-0] [coord-1] [coord-2] [webdemo-0] [webdemo-1] [postgres-0] [postgres-1] [postgres-2]
-                            (no L3 connectivity to each other)
-```
+Brokers start before mesh connectivity and Consul quorum. A two-stage
+deployment wires their instance-pinned public URLs after CVM creation.
+See [leaderless signaling](signaling.md) for protocol, deployment, trust
+boundaries, and failure behavior.
 
 ## Layer 1 — mesh-conn pair-wise overlay
 
 For every **pair** of peers, mesh-conn establishes one `pion/ice`
 connection. ICE punches a direct UDP path through the NAT (in our
 deployment NAT-hairpinned via the provider edge) and stays put. The
-signaling broker drops out of the picture once each pair is up.
+signaling brokers are not in the application data path.
 
 Per pair we then run **one QUIC connection** (quic-go) over the
 ICE conn, treating `ice.Conn` as a `net.PacketConn`. QUIC provides
@@ -290,8 +282,10 @@ After the ICE handshake, mesh-conn has one `*ice.Conn` per peer-pair.
 That's a `net.Conn`-shaped object whose underlying wire is a single
 UDP socket through pion. mesh-conn wraps it as a `net.PacketConn` and
 hands that to `quic-go`, which performs a TLS 1.3 handshake (self-
-signed, since peer trust is bootstrapped from the TURN HMAC + dstack
-TEE layer, not TLS identity) and gives back a `*quic.Conn`.
+signed; QUIC does not authenticate the application identity). The
+signaling snapshots use the cluster bootstrap key, while admission and
+Connect mTLS separately enforce workload identity. QUIC gives back a
+`*quic.Conn`.
 
 ### Why QUIC for the mux
 
@@ -427,10 +421,10 @@ instead of a generic TCP connect check.
   (built-in CA provider; root in Raft, no external derivation).
   End-to-end across the overlay; mesh-conn just sees encrypted bytes.
 - **mesh-conn → mesh-conn** rides ICE. Direct UDP between CVMs on the
-  public internet (or TURN-relayed if hole-punching ever fails).
-  pion/ice doesn't add encryption on top of the data path itself, so
-  unencrypted traffic between mesh-conn endpoints would be on the wire
-  in the clear.
+  public internet. QUIC encrypts the transport using self-signed TLS;
+  its certificate does not establish workload identity. Signaling is
+  authenticated using the shared bootstrap key; Connect mTLS separately
+  authenticates and encrypts application traffic.
 - …all confidential traffic above it is **already encrypted by Envoy
   mTLS** (Layer 3), so the wire is safe even if someone could see the
   UDP datagrams.
@@ -453,10 +447,9 @@ instead of a generic TCP connect check.
   It would equally well move Postgres replication, Redis Sentinel,
   Kafka, etc. — and in fact this example uses it for both Consul
   cluster gossip and Patroni-replication-via-Envoy.
-- **Layer 0 is dumb infra.** Just a public IP running coturn + a tiny
-  broker. Fungible and not in the data path once peers are connected.
+- **Layer 0 has no separate server.** Each coordinator hosts a soft-state
+  signaling broker. Public STUN discovers addresses; neither brokers nor
+  STUN carry application payloads.
 
-If we ever run mesh-conn on a network where ICE can't punch through,
-Layer 1 silently degrades to TURN relay through the coturn box.
-Layer 2 doesn't notice; Layer 3 apps don't notice. They get higher
-RTT, that's all.
+If ICE cannot establish a direct path, the pair fails explicitly. There
+is no automatic TURN relay or alternative application data path.

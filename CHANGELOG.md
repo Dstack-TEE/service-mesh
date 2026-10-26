@@ -6,6 +6,9 @@ This changelog tracks `service-mesh` releases.
 
 ### Changed
 
+- Model Cloud API read retries, quota waits, cancellation, and deployment
+  deadlines, including controls that reproduce failure without client retries.
+
 - Add `modules/mesh-coordinators` so examples keep env values beside named
   instances while the module handles broker discovery and separate value
   resources. Include state moves from the existing flat coordinator resources.

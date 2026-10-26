@@ -122,6 +122,7 @@ control has only one temporal property, `EventuallyConnected`.
 | 7 | [Symbolic authentication and admission](security/README.md) | Unbounded symbolic safety and expected attack witnesses pass | Ideal cryptographic primitives, protected channels, shared platform authority across brokers, and one pinned policy row per broker; separate from the Lean theorems. |
 | 8 | Mesh stream framing and port authorization | Unmodeled | These belong to the mesh data plane. |
 | 9 | [Dynamic slot ownership](bootstrap/SlotOwnership.tla) | Corrected scan passes; old CAS-failure behavior retained as a regression control | Two processes, two slots, one reboot each; delayed requests and lost replies. Administrative reuse and duplicate-instance boundaries also fail stronger goals. No liveness or named-slot claim. |
+| 10 | [Cloud API read retries](deployment/README.md) | Retry limits, timing, cancellation, termination, and conditional recovery checked in finite scenarios | Explicit HTTP and operation deadlines, bounded throttling, and urgent local processing; separate from signaling and whole-deployment progress. |
 
 [proof/verification.json](proof/verification.json) records the Lean tool pin,
 per-proof source hashes and axiom audits. [verification.json](verification.json) records the

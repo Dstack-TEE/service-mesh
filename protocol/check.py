@@ -66,6 +66,17 @@ CHECKS = [
     ("bootstrap", "SlotOwnership", "NonAtomic", "control", "NoLiveAlias"),
     ("bootstrap", "SlotOwnership", "RejoinReachable", "witness", "NoRejoin"),
     ("bootstrap", "SlotOwnership", "BothClaimedReachable", "witness", "NoBothClaimed"),
+    ("deployment", "ReadRetry", "ReadRetry", "verified", None),
+    ("deployment", "ReadRetry", "ProductionTiming", "verified", None),
+    ("deployment", "ReadRetry", "Exponential", "verified", None),
+    ("deployment", "ReadRetry", "Cancellation", "verified", None),
+    ("deployment", "ReadRetry", "Exhaustion", "verified", None),
+    ("deployment", "ReadRetry", "ShortDeadline", "verified", None),
+    ("deployment", "ReadRetry", "NoRetry", "temporal-control", "Recovery"),
+    ("deployment", "ReadRetry", "RequestDeadline", "temporal-control", "Recovery"),
+    ("deployment", "ReadRetry", "IgnoreRetryAfter", "control", "RespectRetryAfter"),
+    ("deployment", "ReadRetry", "IgnoreCancellation", "control", "NoRequestsAfterCancellation"),
+    ("deployment", "ReadRetry", "Reachable", "witness", "NeverSucceeded"),
 ]
 
 

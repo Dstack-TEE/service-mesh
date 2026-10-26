@@ -17,18 +17,19 @@ operation deadline apply to both requests and waits; the HTTP client timeout
 applies to each exchange independently.
 
 The client implementations are in the separate
-[Cloud SDKs at `5a6b4c1`](https://github.com/Phala-Network/phala-cloud/tree/5a6b4c1d01aec115c666171a40ab7971ccd39159),
+[Cloud SDKs at `0410be2`](https://github.com/Phala-Network/phala-cloud/tree/0410be27c5346ace853a7e15463a3eed987dcb03),
 submitted in [Cloud PR #535](https://github.com/Phala-Network/phala-cloud/pull/535):
 Go's `request.go` connects reads to `retry.go`; `errors.go` parses the delay.
 JavaScript's `utils/read-retry.ts` and Python's `retry.py` implement the same
-default read policy. Retry execution uses `cenkalti/backoff/v5`, `ofetch`, and
+default read policy. Retry execution uses `cenkalti/backoff/v5`, Ky, and
 Tenacity respectively, with SDK adapters for response classification and timing.
-A [shared fixture](https://github.com/Phala-Network/phala-cloud/blob/5a6b4c1d01aec115c666171a40ab7971ccd39159/go/testdata/read-retry.json)
-checks 26 scenarios against Go, JS/TS, and both Python clients in CI. The
-[SDK contract](https://github.com/Phala-Network/phala-cloud/blob/5a6b4c1d01aec115c666171a40ab7971ccd39159/docs/sdk-read-retries.md)
-records cancellation and transport limits. JavaScript uses native date parsing
-and rejects waits above its platform timer range; synchronous Python sockets
-use HTTPX timeouts.
+A [shared fixture](https://github.com/Phala-Network/phala-cloud/blob/0410be27c5346ace853a7e15463a3eed987dcb03/go/testdata/read-retry.json)
+checks 23 scenarios against Go, JS/TS, and both Python clients in CI. The
+[SDK contract](https://github.com/Phala-Network/phala-cloud/blob/0410be27c5346ace853a7e15463a3eed987dcb03/docs/sdk-read-retries.md)
+records cancellation and transport limits. JavaScript delegates header parsing,
+retry waits, and per-attempt response timeouts to Ky. Synchronous Python sockets
+use HTTPX timeouts. Header edge cases follow each client library; the shared
+scenarios cover normal server delays and the common retry policy.
 
 SDK regressions exercise the public CVM reads with a 60-second `Retry-After`, a
 30-second HTTP timeout, and a longer operation deadline using Go's virtual clock.

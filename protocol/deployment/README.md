@@ -16,14 +16,24 @@ The default is 30 retries after the initial attempt. Cancellation and the
 operation deadline apply to both requests and waits; the HTTP client timeout
 applies to each exchange independently.
 
-The source is in the separate
-[Go Cloud SDK at `79dd161`](https://github.com/Phala-Network/phala-cloud/tree/79dd1612c1d225c69bd203c71f19f43253f82a81/go),
+The client implementations are in the separate
+[Cloud SDKs at `263896d`](https://github.com/Phala-Network/phala-cloud/tree/263896d8f2e0b4e22de822196372a154b81f4e94),
 submitted in [Cloud PR #535](https://github.com/Phala-Network/phala-cloud/pull/535):
-`request.go` connects reads to `retry.go`; `errors.go` parses the delay.
+Go's `request.go` connects reads to `retry.go`; `errors.go` parses the delay.
+JavaScript's `utils/read-retry.ts` and Python's `retry.py` implement the same
+default read policy. A [shared fixture](https://github.com/Phala-Network/phala-cloud/blob/263896d8f2e0b4e22de822196372a154b81f4e94/go/testdata/read-retry.json)
+checks 28 scenarios against Go, JS/TS, and both Python clients in CI. The
+[SDK contract](https://github.com/Phala-Network/phala-cloud/blob/263896d8f2e0b4e22de822196372a154b81f4e94/docs/sdk-read-retries.md)
+records each language's cancellation and transport timeout limits; in-flight
+synchronous Python sockets use HTTPX timeouts.
+
 SDK regressions exercise the public CVM reads with a 60-second `Retry-After`, a
 30-second HTTP timeout, and a longer operation deadline using Go's virtual clock.
 They also cover HTTP dates, capped backoff, exhaustion, cancellation, permanent
-errors, and integer overflow. No implementation refinement is claimed here.
+errors, and integer overflow. The model treats retryable responses as 429 and
+assumes an already decoded delay. Parsing and status classification are checked
+by conformance tests. No implementation refinement or full SDK equivalence is
+claimed here.
 
 ## Checked properties and bounds
 

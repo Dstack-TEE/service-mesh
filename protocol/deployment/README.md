@@ -17,17 +17,18 @@ operation deadline apply to both requests and waits; the HTTP client timeout
 applies to each exchange independently.
 
 The client implementations are in the separate
-[Cloud SDKs at `2e90636`](https://github.com/Phala-Network/phala-cloud/tree/2e9063638fbf11944e04dbb23d8234ef473e9e8f),
+[Cloud SDKs at `5a6b4c1`](https://github.com/Phala-Network/phala-cloud/tree/5a6b4c1d01aec115c666171a40ab7971ccd39159),
 submitted in [Cloud PR #535](https://github.com/Phala-Network/phala-cloud/pull/535):
 Go's `request.go` connects reads to `retry.go`; `errors.go` parses the delay.
 JavaScript's `utils/read-retry.ts` and Python's `retry.py` implement the same
-default read policy. Retry execution uses `cenkalti/backoff/v5`, `p-retry`, and
+default read policy. Retry execution uses `cenkalti/backoff/v5`, `ofetch`, and
 Tenacity respectively, with SDK adapters for response classification and timing.
-A [shared fixture](https://github.com/Phala-Network/phala-cloud/blob/2e9063638fbf11944e04dbb23d8234ef473e9e8f/go/testdata/read-retry.json)
-checks 28 scenarios against Go, JS/TS, and both Python clients in CI. The
-[SDK contract](https://github.com/Phala-Network/phala-cloud/blob/2e9063638fbf11944e04dbb23d8234ef473e9e8f/docs/sdk-read-retries.md)
-records each language's cancellation and transport timeout limits; in-flight
-synchronous Python sockets use HTTPX timeouts.
+A [shared fixture](https://github.com/Phala-Network/phala-cloud/blob/5a6b4c1d01aec115c666171a40ab7971ccd39159/go/testdata/read-retry.json)
+checks 26 scenarios against Go, JS/TS, and both Python clients in CI. The
+[SDK contract](https://github.com/Phala-Network/phala-cloud/blob/5a6b4c1d01aec115c666171a40ab7971ccd39159/docs/sdk-read-retries.md)
+records cancellation and transport limits. JavaScript uses native date parsing
+and rejects waits above its platform timer range; synchronous Python sockets
+use HTTPX timeouts.
 
 SDK regressions exercise the public CVM reads with a 60-second `Retry-After`, a
 30-second HTTP timeout, and a longer operation deadline using Go's virtual clock.

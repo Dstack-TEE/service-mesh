@@ -1,8 +1,9 @@
 # Protocol models
 
-This directory specifies the mesh's signaling protocols and checks their
-properties. It contains an [unbounded Lean proof](proof/README.md), finite TLA+
-models, counterexample controls, and reproducible verification runners.
+This directory specifies the mesh protocols and checks their properties. It
+contains [unbounded Lean protocol proofs](proof/README.md),
+[symbolic security models](security/README.md), finite TLA+ models,
+counterexample controls, and reproducible verification runners.
 
 The composed Lean theorem proves conditional convergence of the leaderless
 signaling state protocol: offers and answers stabilize, both peers learn the
@@ -10,13 +11,20 @@ same credentials, and candidates gathered in that stable epoch are eventually
 delivered. Separate safety lemmas cover provenance, ordering, offer binding,
 and candidate isolation. This is a protocol proof, not a Go implementation proof.
 
-## Active verification target: the signaling protocol
+## Verification scope
 
-The active proof target is the leaderless signaling algorithm: snapshot ordering,
+The completed signaling proof targets the leaderless algorithm: snapshot ordering,
 offer/answer binding, candidate state, and recovery across peer and broker
 failures. Go implementation refinement, attestation admission, and proofs of
-cryptographic primitives are outside this target. The existing admission and
-callback models remain separate evidence; they do not gate the signaling claim.
+cryptographic primitives remain outside that theorem. Admission authorization
+and shared-key signaling authentication now have separate symbolic security
+models. Their [claim ledger and roadmap](security/README.md) record the
+assumptions, counterexamples, and remaining composition work.
+Admission policy selection also has an unbounded Lean proof. A separate
+bootstrap model checks the corrected dynamic allocator within explicit finite
+bounds and retains the old CAS-failure behavior as a regression control. A separate Lean
+theorem proves one-slot-per-instance for the corrected no-cleanup protocol
+over unbounded executions.
 
 The signaling specification assumes fixed honest membership, authenticated
 messages, fresh identifiers, and unbounded logical counters. Its liveness result
@@ -37,7 +45,7 @@ refinement theorem between them or the Go implementation is claimed.
 
 ## Run the checks
 
-Run both suites from the repository root. The [Lean runner](proof/README.md)
+Run the suites from the repository root. The [Lean runner](proof/README.md)
 requires Python 3.11+, `curl`, GNU `tar`, and `zstd` on Linux x86-64:
 
 ```sh
@@ -51,7 +59,18 @@ For finite TLC checks, prerequisites are Python 3.10+, Java (tested with OpenJDK
 python3 protocol/check.py
 ```
 
-The runner downloads [TLA+ tools 1.7.4](https://github.com/tlaplus/tlaplus/releases/tag/v1.7.4)
+For unbounded symbolic security checks on Linux x86-64, with Python 3.12+
+and `curl`:
+
+```sh
+python3 protocol/security/check.py
+```
+
+The security runner pins Tamarin and Maude and checks both proved properties
+and expected attack traces. Its results do not establish project-wide security
+or compose with the signaling theorem automatically.
+
+The TLC runner downloads [TLA+ tools 1.7.4](https://github.com/tlaplus/tlaplus/releases/tag/v1.7.4)
 to `$XDG_CACHE_HOME/dstack-service-mesh/tla2tools/1.7.4/` (default
 `~/.cache/`). It verifies a pinned SHA-256 checksum before executing the JAR.
 An existing `TLA2TOOLS_JAR` path can supply the same pinned artifact offline.
@@ -71,13 +90,14 @@ polynomial. They do not use random simulation, state constraints, or symmetry
 reduction. `CHECK_DEADLOCK FALSE` allows idle/waiting states; connection progress
 is checked separately as a temporal property.
 
-The suite distinguishes five outcomes:
+The suite distinguishes six outcomes:
 
 | Label | Required result |
 | --- | --- |
 | `VERIFIED MODEL` | TLC completes the reachable state graph without an invariant or temporal-property violation. |
 | `BOUNDED SAFETY PREFIXES` | TLC completes the explicitly limited prefix graph; no composed liveness claim is made. |
 | `COUNTEREXAMPLE CONTROL` | A deliberately weakened model violates the specified property. |
+| `LIFECYCLE/ASSUMPTION COUNTEREXAMPLE` | A changed lifecycle or trust assumption produces the named violation. |
 | `REACHABILITY WITNESS` | An intentionally false invariant produces a trace reaching successful acceptance, connection, or token issuance. |
 | `FAIL` | Any result differs from its expected outcome. |
 
@@ -90,6 +110,8 @@ control has only one temporal property, `EventuallyConnected`.
 | Order | Protocol or state machine | Current status | Scope |
 | --- | --- | --- | --- |
 | 0 | [Composed signaling state protocol](proof/Signaling.lean) | Unbounded conditional convergence and safety lemmas kernel-checked | Arbitrary natural-number traces and finite pair counts; explicit authentication, finite external resets, fairness, publication, and lease-window premises. |
+| 0a | [Admission policy authorization](proof/AdmissionPolicy.lean) | Unbounded authorization, first-match selection, and self-scope confinement kernel-checked | Arbitrary normalized policy lists, optional KMS/OS pins, wildcard peers, and shared identities/revisions; typed permission terms. |
+| 0b | [Corrected no-cleanup slot allocation](proof/SlotAllocation.lean) | Unbounded one-slot-per-instance safety kernel-checked | Arbitrary ordered-scan traces with resets and replayable captured CAS requests; empty initial registry and no deletion, replacement, or unauthorized writes. No exclusive-live-ownership or progress claim. |
 | 1 | [Snapshot storage and receive ordering](snapshots/SnapshotStore.tla) | Safety checks pass | One authenticated directed stream, three independent brokers, clocks 1–2, two distinct boot IDs in either lexical order. |
 | 2 | [ICE offer/answer coordination](handshake/OfferAnswer.tla) | Safety and conditional liveness pass | One peer pair, two and three offers, two and three responder generations per offer. |
 | 3 | [Attempt callback ownership](attempts/AttemptOwnership.tla) | Safety checks pass | Two sequential attempts, callbacks delayed across cleanup and replacement. |
@@ -97,13 +119,15 @@ control has only one temporal property, `EventuallyConnected`.
 | 5 | [Attested admission sequencing](admission/Admission.tla) | Safety checks pass | One broker-local nonce, two competing requests, all 1,024 combinations of five check results. |
 | 6 | [Combined restart and broker-loss recovery](recovery/RendezvousRecovery.tla) | Bounded safety prefixes pass; integrated liveness unverified | Two peers, two brokers, one restart per peer, eight transitions from cold and established states, clocks through four, two auth generations per boot, two-tick leases. |
 | 6a | [Candidate mapping lifetime](lifetime/CandidateLifetime.tla) | Environmental controls reproduce expiry despite intact delivery | Explicit finite peer delay, mapping lifetime, and delivery delay; outside the signaling-state theorem. |
-| 7 | Cryptographic authentication and attestation | Outside the active signaling proof target | Authentication is a primitive assumption for signaling; a separate security-protocol analysis may examine its realization. |
-| 8 | Mesh stream framing and port authorization | Outside the active signaling proof target | These belong to the mesh data plane. |
+| 7 | [Symbolic authentication and admission](security/README.md) | Unbounded symbolic safety and expected attack witnesses pass | Ideal cryptographic primitives, protected channels, shared platform authority across brokers, and one pinned policy row per broker; separate from the Lean theorems. |
+| 8 | Mesh stream framing and port authorization | Unmodeled | These belong to the mesh data plane. |
+| 9 | [Dynamic slot ownership](bootstrap/SlotOwnership.tla) | Corrected scan passes; old CAS-failure behavior retained as a regression control | Two processes, two slots, one reboot each; delayed requests and lost replies. Administrative reuse and duplicate-instance boundaries also fail stronger goals. No liveness or named-slot claim. |
 
 [proof/verification.json](proof/verification.json) records the Lean tool pin,
-source hash, and axiom audit. [verification.json](verification.json) records the
+per-proof source hashes and axiom audits. [verification.json](verification.json) records the
 latest TLC run, state counts, model/config hashes, tool checksum, and reviewed implementation hashes.
-The GitHub workflow reruns both suites and uploads fresh logs. Source hashes
+The GitHub workflow reruns the Lean, TLC, and symbolic security suites, tests
+the bootstrap allocator with Go's race detector, and uploads fresh proof logs. Source hashes
 identify what was reviewed; they do not establish implementation refinement.
 
 ## What each model checks
@@ -168,7 +192,8 @@ stalled execution.
 Candidate gathering, the Go channel/lock interleavings, and ICE/QUIC internals
 are abstracted. No broker topology is modeled here. Thus this conditional
 liveness result does not establish that the snapshot protocol satisfies its
-delivery assumptions. That composition is the next verification task.
+delivery assumptions. The separate composed Lean theorem proves conditional
+signaling convergence; no refinement theorem connects it to this finite model.
 
 ### Attempt callback ownership
 

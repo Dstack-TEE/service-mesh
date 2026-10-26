@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kernel-check unbounded signaling theorems and audit every declaration's axioms."""
+"""Kernel-check protocol theorems and audit every authored declaration's axioms."""
 
 import argparse
 from datetime import datetime, timezone
@@ -17,6 +17,15 @@ VERSION = "4.35.0"
 SHA256 = "7289597a44543246c9227b8cae501767e095ce17f6d448b95fc4a8dc97268f6d"
 URL = f"https://github.com/leanprover/lean4/releases/download/v{VERSION}/lean-{VERSION}-linux.tar.zst"
 ALLOWED_AXIOMS = {"propext", "Classical.choice", "Quot.sound"}
+PROOFS = {
+    "Signaling": {"signaling_and_candidates_converge", "finite_mesh_converges"},
+    "AdmissionPolicy": {"authorization_sound", "selection_is_first_match",
+                        "identity_index_preserves_selection",
+                        "wildcard_shadowing_changes_grant",
+                        "cross_row_evidence_mixing_is_rejected"},
+    "SlotAllocation": {"corrected_allocation_never_duplicates", "step_preserves",
+                       "old_request_can_commit_after_reset"},
+}
 
 
 def digest(path):
@@ -57,12 +66,8 @@ def lean_toolchain():
     return lean, version
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--logs", type=Path, default=REPO / ".local" / "protocol-proof")
-    parser.add_argument("--report", type=Path, help="also refresh the checked-in proof evidence")
-    args = parser.parse_args()
-    source = ROOT / "Signaling.lean"
+def check_proof(namespace, lean, logs):
+    source = ROOT / f"{namespace}.lean"
     content = source.read_text()
     # The dependency audit is authoritative; these checks also catch easy
     # accidental omissions, unchecked commands and unreviewed import changes.
@@ -75,49 +80,75 @@ def main():
     declarations = re.findall(r"^(?:theorem|def)\s+(\w+)\b", content, re.M)
     if len(declarations) != len(set(declarations)):
         raise RuntimeError("Duplicate declaration names")
-    if "signaling_and_candidates_converge" not in declarations:
-        raise RuntimeError("The composed convergence theorem is missing")
-    lean, version = lean_toolchain()
-    logs = args.logs.resolve()
-    logs.mkdir(parents=True, exist_ok=True)
+    if not PROOFS[namespace].issubset(declarations):
+        raise RuntimeError(f"Required {namespace} theorems are missing")
     # A fresh direct source compilation prevents a stale local .olean from
     # substituting for the actual checked-in proof. No Lake or external library.
-    audit = content + "\n" + "\n".join(f"#print axioms Signaling.{name}" for name in declarations) + "\n"
+    audit = content + "\n" + "\n".join(f"#print axioms {namespace}.{name}" for name in declarations) + "\n"
     with tempfile.TemporaryDirectory(prefix="mesh-lean-") as temporary:
-        proof = Path(temporary) / "Signaling.lean"
+        proof = Path(temporary) / source.name
         proof.write_text(audit)
         proc = subprocess.run([str(lean), "-DwarningAsError=true", str(proof)],
                               capture_output=True, text=True, timeout=180, check=False)
     output = proc.stdout + proc.stderr
-    (logs / "kernel-and-axioms.log").write_text(output)
+    (logs / f"{namespace}-kernel-and-axioms.log").write_text(output)
     dependencies = {}
-    pattern = r"'Signaling\.(\w+)' (?:depends on axioms: \[([^\]]*)\]|does not depend on any axioms)"
+    pattern = rf"'{namespace}\.(\w+)' (?:depends on axioms: \[([^\]]*)\]|does not depend on any axioms)"
     for match in re.finditer(pattern, output):
         dependencies[match[1]] = sorted(filter(None, (s.strip() for s in (match[2] or "").split(","))))
     unexpected = {name: sorted(set(axioms) - ALLOWED_AXIOMS) for name, axioms in dependencies.items()
                   if set(axioms) - ALLOWED_AXIOMS}
     passed = proc.returncode == 0 and set(dependencies) == set(declarations) and not unexpected
-    report = {
-        "checked_at_utc": datetime.now(timezone.utc).isoformat(),
-        "scope": "Conditional unbounded signaling protocol proofs; no implementation, ICE, or attestation claim",
-        "passed": passed,
-        "tool": {"version": version, "archive_sha256": SHA256},
-        "source": "proof/Signaling.lean", "source_sha256": digest(source),
-        "checker_sha256": digest(Path(__file__)),
+    result = {
+        "namespace": namespace, "passed": passed,
+        "source": f"proof/{source.name}",
+        "source_sha256": hashlib.sha256(content.encode()).hexdigest(),
         "declaration_count": len(declarations),
-        "allowed_logical_axioms": sorted(ALLOWED_AXIOMS),
         "axiom_dependencies": dependencies,
         "unexpected_axioms": unexpected,
+        "log": f"{namespace}-kernel-and-axioms.log",
+    }
+    print(f"{'PASS' if passed else 'FAIL'} {namespace}: {len(declarations)} declarations", flush=True)
+    if not passed:
+        print(output)
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--logs", type=Path, default=REPO / ".local" / "protocol-proof")
+    parser.add_argument("--report", type=Path, help="also refresh the checked-in proof evidence")
+    args = parser.parse_args()
+    actual = {p.stem for p in ROOT.glob("*.lean")}
+    if actual != set(PROOFS):
+        raise RuntimeError("Lean sources and proof inventory differ")
+    checker_hash = digest(Path(__file__))
+    lean, version = lean_toolchain()
+    logs = args.logs.resolve()
+    logs.mkdir(parents=True, exist_ok=True)
+    proofs = [check_proof(namespace, lean, logs) for namespace in PROOFS]
+    inputs_unchanged = (checker_hash == digest(Path(__file__)) and
+        all(p["source_sha256"] == digest(ROOT.parent / p["source"]) for p in proofs))
+    report = {
+        "schema_version": 2,
+        "checked_at_utc": datetime.now(timezone.utc).isoformat(),
+        "scope": "Unbounded signaling, policy authorization, and corrected no-cleanup slot ownership; separate specifications",
+        "passed": inputs_unchanged and all(p["passed"] for p in proofs),
+        "inputs_unchanged": inputs_unchanged,
+        "tool": {"version": version, "archive_sha256": SHA256},
+        "checker_sha256": checker_hash,
+        "declaration_count": sum(p["declaration_count"] for p in proofs),
+        "allowed_logical_axioms": sorted(ALLOWED_AXIOMS),
+        "proofs": proofs,
     }
     serialized = json.dumps(report, indent=2) + "\n"
     (logs / "report.json").write_text(serialized)
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(serialized)
-    if not passed:
-        print(output)
-        raise RuntimeError(f"Lean verification/audit failed; logs: {logs}")
-    print(f"PASS: {len(declarations)} declarations kernel-checked; composed signaling/candidate convergence; "
+    if not report["passed"]:
+        raise RuntimeError(f"Lean verification/audit failed or inputs changed; logs: {logs}")
+    print(f"PASS: {report['declaration_count']} declarations kernel-checked; "
           f"no custom axioms or placeholders; logs: {logs}")
 
 

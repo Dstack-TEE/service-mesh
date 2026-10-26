@@ -1,5 +1,5 @@
 {
-  "checked_at_utc": "2026-10-25T09:28:44.567644+00:00",
+  "checked_at_utc": "2026-10-26T04:15:37.856537+00:00",
   "scope": "Exhaustive finite model checking, not a Go implementation proof",
   "tool": {
     "release": "1.7.4",
@@ -8,7 +8,8 @@
   "implementation_sha256": {
     "components/mesh-conn/signaling.go": "e80151edbce7b3eee19de8e72df28d2141e1cf017198b33986c274568ddadc94",
     "components/mesh-conn/main.go": "f6ce03f029a5041a20824896d2b0dbf8ccbfa4b69a61f592c712ae1bfcabae94",
-    "components/admission-broker/main.go": "fb7b75a0e95a73f4c88afe51d5bf3ab9c600c548f101432a9c5fe006c37c9d87"
+    "components/admission-broker/main.go": "fb7b75a0e95a73f4c88afe51d5bf3ab9c600c548f101432a9c5fe006c37c9d87",
+    "components/bootstrap-secrets/main.go": "9d26ed297da6d976ab6c905290b5a82267faf1340f6b94e857a3001f2d835c94"
   },
   "checks": [
     {
@@ -500,6 +501,118 @@
       "log": "lifetime-Reachable.log",
       "generated_states": 11,
       "distinct_states": 11
+    },
+    {
+      "check": "bootstrap/SlotOwnership",
+      "kind": "verified",
+      "expectation_met": true,
+      "exit_code": 0,
+      "expected_violation": null,
+      "module": "bootstrap/SlotOwnership.tla",
+      "config": "bootstrap/SlotOwnership.cfg",
+      "module_sha256": "da60a45862b54f4b4a229d273b743eb499239a05daf7faed5fa6efb0c1dc6b14",
+      "config_sha256": "415437ae9df618a20cfef7a732319b785a051e3e5b193ac1e6e46e73c9feac3c",
+      "log": "bootstrap-SlotOwnership.log",
+      "generated_states": 67817,
+      "distinct_states": 15801
+    },
+    {
+      "check": "bootstrap/UncheckedCASFailure",
+      "kind": "control",
+      "expectation_met": true,
+      "exit_code": 12,
+      "expected_violation": "InstanceHasOneSlot",
+      "module": "bootstrap/SlotOwnership.tla",
+      "config": "bootstrap/UncheckedCASFailure.cfg",
+      "module_sha256": "da60a45862b54f4b4a229d273b743eb499239a05daf7faed5fa6efb0c1dc6b14",
+      "config_sha256": "0f93069ca9ffdeb0c280572f974ecc475fb9966b9b9ade4d17bdc51ce485344d",
+      "log": "bootstrap-UncheckedCASFailure.log",
+      "generated_states": 13161,
+      "distinct_states": 4352
+    },
+    {
+      "check": "bootstrap/LiveCleanup",
+      "kind": "boundary",
+      "expectation_met": true,
+      "exit_code": 12,
+      "expected_violation": "NoLiveAlias",
+      "module": "bootstrap/SlotOwnership.tla",
+      "config": "bootstrap/LiveCleanup.cfg",
+      "module_sha256": "da60a45862b54f4b4a229d273b743eb499239a05daf7faed5fa6efb0c1dc6b14",
+      "config_sha256": "c89e2a074a30386b6c6f7d47c63bd8937fd6c80bba9905b750f872693c1c481e",
+      "log": "bootstrap-LiveCleanup.log",
+      "generated_states": 5366,
+      "distinct_states": 1879
+    },
+    {
+      "check": "bootstrap/RetiredCleanup",
+      "kind": "boundary",
+      "expectation_met": true,
+      "exit_code": 12,
+      "expected_violation": "InstanceHasOneSlot",
+      "module": "bootstrap/SlotOwnership.tla",
+      "config": "bootstrap/RetiredCleanup.cfg",
+      "module_sha256": "da60a45862b54f4b4a229d273b743eb499239a05daf7faed5fa6efb0c1dc6b14",
+      "config_sha256": "3223972fd21be64c93c0267f9b835618efb20a40dcdb77ffc73334f1c1b739ee",
+      "log": "bootstrap-RetiredCleanup.log",
+      "generated_states": 47499,
+      "distinct_states": 13942
+    },
+    {
+      "check": "bootstrap/DuplicateInstance",
+      "kind": "boundary",
+      "expectation_met": true,
+      "exit_code": 12,
+      "expected_violation": "NoLiveAlias",
+      "module": "bootstrap/SlotOwnership.tla",
+      "config": "bootstrap/DuplicateInstance.cfg",
+      "module_sha256": "da60a45862b54f4b4a229d273b743eb499239a05daf7faed5fa6efb0c1dc6b14",
+      "config_sha256": "565a6afe836c8c1e43ba6c249f62178778c7b98543fc19f2b1467152595ce084",
+      "log": "bootstrap-DuplicateInstance.log",
+      "generated_states": 434,
+      "distinct_states": 205
+    },
+    {
+      "check": "bootstrap/NonAtomic",
+      "kind": "control",
+      "expectation_met": true,
+      "exit_code": 12,
+      "expected_violation": "NoLiveAlias",
+      "module": "bootstrap/SlotOwnership.tla",
+      "config": "bootstrap/NonAtomic.cfg",
+      "module_sha256": "da60a45862b54f4b4a229d273b743eb499239a05daf7faed5fa6efb0c1dc6b14",
+      "config_sha256": "0269d88835da8979387c1c6532d5cded1981308406bd2e6d7f75fdcd1f194eee",
+      "log": "bootstrap-NonAtomic.log",
+      "generated_states": 2166,
+      "distinct_states": 886
+    },
+    {
+      "check": "bootstrap/RejoinReachable",
+      "kind": "witness",
+      "expectation_met": true,
+      "exit_code": 12,
+      "expected_violation": "NoRejoin",
+      "module": "bootstrap/SlotOwnership.tla",
+      "config": "bootstrap/RejoinReachable.cfg",
+      "module_sha256": "da60a45862b54f4b4a229d273b743eb499239a05daf7faed5fa6efb0c1dc6b14",
+      "config_sha256": "fef4feee76abc505ac90b4041d6754736bfe0b3aad8f0e7dd5b33a310dc4dada",
+      "log": "bootstrap-RejoinReachable.log",
+      "generated_states": 671,
+      "distinct_states": 306
+    },
+    {
+      "check": "bootstrap/BothClaimedReachable",
+      "kind": "witness",
+      "expectation_met": true,
+      "exit_code": 12,
+      "expected_violation": "NoBothClaimed",
+      "module": "bootstrap/SlotOwnership.tla",
+      "config": "bootstrap/BothClaimedReachable.cfg",
+      "module_sha256": "da60a45862b54f4b4a229d273b743eb499239a05daf7faed5fa6efb0c1dc6b14",
+      "config_sha256": "d064a4ba149ce61911f5facd9ce895712d9d65ecb5b7ec230c983ee9cb796316",
+      "log": "bootstrap-BothClaimedReachable.log",
+      "generated_states": 5297,
+      "distinct_states": 1944
     }
   ]
 }

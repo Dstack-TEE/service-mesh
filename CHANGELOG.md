@@ -47,6 +47,10 @@ This changelog tracks `service-mesh` releases.
 
 ### Security
 
+- Fixed dynamic slot allocation to reread a slot after failed CAS, preventing
+  delayed requests across restarts from assigning one instance two slots.
+  Use consistent reads and report exhausted permanent slots without waiting
+  for unsafe deletion; slot reuse remains unsupported.
 - Patroni passwords now come from in-TEE derivation, not Terraform
   state.
 - Validated the experimental KMS key-provider setting on AMD SEV-SNP so
@@ -60,6 +64,12 @@ This changelog tracks `service-mesh` releases.
 
 ### Documentation
 
+- Added kernel-checked admission-policy selection and scope proofs, including
+  wildcard precedence and optional measurement pins; extended admission models
+  to brokers sharing a platform authority and added slot-lifecycle traces.
+- Added unbounded symbolic admission and signaling-authentication checks,
+  expected attack traces, and a protocol security roadmap that makes
+  shared-key, instance-identity, and token-channel assumptions explicit.
 - Added kernel-checked Lean proofs of unbounded signaling-state convergence
   and candidate dissemination, with explicit failure/timing premises and
   executable NAT-expiry counterexamples.

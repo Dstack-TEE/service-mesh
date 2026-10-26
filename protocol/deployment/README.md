@@ -17,13 +17,15 @@ operation deadline apply to both requests and waits; the HTTP client timeout
 applies to each exchange independently.
 
 The client implementations are in the separate
-[Cloud SDKs at `263896d`](https://github.com/Phala-Network/phala-cloud/tree/263896d8f2e0b4e22de822196372a154b81f4e94),
+[Cloud SDKs at `2e90636`](https://github.com/Phala-Network/phala-cloud/tree/2e9063638fbf11944e04dbb23d8234ef473e9e8f),
 submitted in [Cloud PR #535](https://github.com/Phala-Network/phala-cloud/pull/535):
 Go's `request.go` connects reads to `retry.go`; `errors.go` parses the delay.
 JavaScript's `utils/read-retry.ts` and Python's `retry.py` implement the same
-default read policy. A [shared fixture](https://github.com/Phala-Network/phala-cloud/blob/263896d8f2e0b4e22de822196372a154b81f4e94/go/testdata/read-retry.json)
+default read policy. Retry execution uses `cenkalti/backoff/v5`, `p-retry`, and
+Tenacity respectively, with SDK adapters for response classification and timing.
+A [shared fixture](https://github.com/Phala-Network/phala-cloud/blob/2e9063638fbf11944e04dbb23d8234ef473e9e8f/go/testdata/read-retry.json)
 checks 28 scenarios against Go, JS/TS, and both Python clients in CI. The
-[SDK contract](https://github.com/Phala-Network/phala-cloud/blob/263896d8f2e0b4e22de822196372a154b81f4e94/docs/sdk-read-retries.md)
+[SDK contract](https://github.com/Phala-Network/phala-cloud/blob/2e9063638fbf11944e04dbb23d8234ef473e9e8f/docs/sdk-read-retries.md)
 records each language's cancellation and transport timeout limits; in-flight
 synchronous Python sockets use HTTPX timeouts.
 

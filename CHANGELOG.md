@@ -9,6 +9,7 @@ This changelog tracks `service-mesh` releases.
 - Model Cloud API read retries, quota waits, cancellation, and deployment
   deadlines, including controls that reproduce failure without client retries.
   Link the shared retry contract tested by Go, JavaScript, and both Python clients.
+  Pin the library-backed SDK adapters using backoff, p-retry, and Tenacity.
 
 - Add `modules/mesh-coordinators` so examples keep env values beside named
   instances while the module handles broker discovery and separate value

@@ -1,8 +1,13 @@
-# Signaling protocol proof
+# Protocol proofs
 
 [Signaling.lean](Signaling.lean) proves safety and conditional convergence of the
-leaderless signaling state protocol over unbounded traces. Lean checks the proof
-terms; this is a separate result from the finite TLA+ model checks.
+leaderless signaling state protocol over unbounded traces.
+[AdmissionPolicy.lean](AdmissionPolicy.lean) proves authorization properties for
+arbitrary normalized policy lists. [SlotAllocation.lean](SlotAllocation.lean)
+proves one-slot-per-instance safety for the corrected no-cleanup allocator over
+unbounded executions. These are independent specifications; no
+composition theorem between them is claimed. Lean checks their proof terms
+separately from the finite TLA+ model checks.
 
 Run from the repository root on Linux x86-64:
 
@@ -18,11 +23,11 @@ run needs a 567 MiB download and about 3 GiB for the toolchain. An offline
 `LEAN4_ARCHIVE` can supply the same checksum-verified archive. The extracted
 cache, like the local operating system, is trusted.
 
-The checker compiles a fresh copy of the source with warnings treated as errors,
+The checker compiles a fresh copy of each source with warnings treated as errors,
 then asks Lean to print the axiom dependencies of every authored theorem and
 definition. It rejects placeholders, unreviewed imports, custom axioms, and
-missing audit results. The proof imports only Lean's pinned `Std` library; it
-uses neither Mathlib nor an external solver. The permitted logical foundations
+missing audit results. Each proof imports only Lean's pinned `Std` library;
+none uses Mathlib or an external solver. The permitted logical foundations
 are Lean's standard `propext`, `Classical.choice`, and `Quot.sound`.
 
 Logs go to `.local/protocol-proof/`. Refresh the checked-in evidence with:
@@ -31,7 +36,13 @@ Logs go to `.local/protocol-proof/`. Refresh the checked-in evidence with:
 python3 protocol/proof/check.py --report protocol/proof/verification.json
 ```
 
-## Proven statement
+The evidence report uses schema version 2: `proofs` records each source, hash,
+declaration count, and axiom audit. The top-level count is their total. The
+runner rejects an unlisted Lean source or inputs changed during verification.
+
+## Signaling proof
+
+### Proven statement
 
 `signaling_and_candidates_converge` composes the storage, client, controller,
 and candidate rules. For each peer pair, under the assumptions below:
@@ -62,7 +73,7 @@ with an explicit infinite cold-start execution, live broker exchanges, both
 descriptor streams, and nonempty candidate state. It checks the premises can
 hold together. This witness supplements, rather than replaces, the general proof.
 
-## Protocol assumptions
+### Protocol assumptions
 
 These are premises of the theorem, not conclusions hidden behind the word
 “verified.”
@@ -90,7 +101,7 @@ weaker than assuming successful fresh delivery. `BrokerWindow` contains actual
 max-register operations and timing premises; `read_window_fresh` derives that
 the returned record is at least as recent as the protected publication.
 
-## Why the parts compose
+### Why the parts compose
 
 1. `historyFromClock` derives source ordering from the increment/max operations.
    An unbounded publishing suffix eventually exceeds every clock in the finite
@@ -114,7 +125,7 @@ the returned record is at least as recent as the protected publication.
 7. `candidate_retained_in_stable_epoch` and full-snapshot transport prove
    candidate delivery in the same stabilized credential epoch.
 
-## What this claim excludes
+### What this claim excludes
 
 This verifies the specified signaling **state protocol**, under the listed
 premises. It does not prove the Go implementation refines the specification,
@@ -133,3 +144,77 @@ The Lean state protocol is not proved to refine, or be refined by, the older
 `RecoverySpec` TLA+ model. Its bounded TLC prefixes retain their original status;
 the unbounded claim here rests on the composed Lean theorem and its explicit
 assumptions.
+
+## Admission policy authorization
+
+`authorization_sound` proves that each grant comes from one matching policy
+row. The request identity, verified compose hash, and optional peer constraint
+must agree in that row; rights from different rows cannot be combined.
+`selection_is_first_match` specifies the selected row and the nonmatching
+prefix before it. `identity_index_preserves_selection` proves that grouping
+rows by identity while retaining order preserves the result.
+
+The proof covers arbitrary list sizes, shared identities and compose hashes,
+multiple allowed revisions, wildcard peers, and optional KMS/OS pins.
+`profile_matches_spec` gives the exact meaning of enabled and disabled pins.
+Pinned KMS mismatch, unverified pinned OS measurements, and pinned OS mismatch
+all cause rejection. Disabling a pin imposes no implicit measurement check.
+
+Permissions are typed grant terms. `issued_node_identity_is_confined` and
+`issued_agent_read_is_confined` bind self-scoped rights to the request's peer
+label and configured datacenter. Service identities, named service writes,
+KV-prefix writes, and cluster-wide session writes remain explicit policy
+grants. These statements do not prove Consul's interpretation of the terms or
+authenticate the physical owner of a quoted peer label.
+
+Kernel-checked witnesses establish that an earlier wildcard can shadow an
+exact-peer row with different permissions, that matching fields from different
+rows cannot authorize a request, and that a peer-pinned row rejects another
+peer even with the same approved revision. The wildcard witness is an
+order-dependent policy outcome, not a claim that the current generated policy
+contains that overlap.
+
+The specification starts after policy/evidence normalization. It does not
+prove parsing, cryptographic verification, nonce freshness, ACL serialization,
+or a semantic connection to the Tamarin theory. See the
+[security ledger](../security/README.md) for those contracts and the bootstrap
+findings that remain open.
+
+## Corrected slot allocation without cleanup
+
+`corrected_allocation_never_duplicates` proves that one instance identifier
+never owns two registry slots in the specified ordered CAS protocol. It
+quantifies over arbitrary natural-number slot indices, client identifiers,
+instance identifiers, execution lengths, and resets. It requires no fairness
+or finite-failure assumption because it is a safety property.
+
+The proof derives four invariants from the transition rules:
+
+- Each client's cursor has passed only slots observed to belong to another
+  instance.
+- A cached nonempty read remains valid because occupied slots cannot change.
+- Each captured request carries that same earlier-slot property.
+- Every occupied slot has only other owners at earlier indices. This implies
+  that its own instance identifier cannot occupy another slot.
+
+These properties are conclusions of `step_preserves` and `trace_invariant`,
+not premises supplied to the composed theorem. Capturing a request records it
+in ghost history. Any historical request can commit or replay after a reset;
+the history is not a physical queue or a storage-boundedness claim. The
+`old_request_can_commit_after_reset` witness exercises that delayed-commit path.
+
+The protocol advances a cursor only after reading a foreign owner. A failed
+or abandoned CAS may trigger a reread of the same slot; a reset starts at slot
+zero. The runtime now uses that reread rule. The previous direct advance after
+CAS failure is excluded from this corrected protocol and retained as a TLC
+regression control and a deterministic Go regression.
+
+The registry starts empty and supports only atomic create-if-absent writes
+from captured protocol requests. There is no deletion, reassignment, malicious
+registry writer, or cleanup transition. Consequently, this theorem cannot
+justify slot reuse. It also does not prove exclusive live ownership: concurrent
+clients can use the same instance identifier and report the same slot.
+Allocation progress, finite-pool exhaustion, named-slot provisioning, and
+implementation/TLC refinement remain outside this theorem. The
+[bootstrap findings](../security/README.md#dynamic-slot-allocation-findings)
+record the previous-algorithm and reuse counterexamples.

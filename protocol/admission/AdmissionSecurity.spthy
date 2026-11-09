@@ -1,0 +1,288 @@
+theory AdmissionSecurity
+begin
+
+builtins: hashing, signing
+
+/* ToBroker/FromBroker are an ideal confidential, endpoint-authenticated
+   channel. Persistent messages permit arbitrary replay and delay; delivery
+   is not required. PUBLIC_CHANNEL uses the native Out/In attacker interface.
+   ICE/QUIC does not prove the protected-channel assumption. */
+#ifdef OMIT_REPORT_BINDING
+macros: reportBinding(binding, nonce, report) = report
+#else
+macros: reportBinding(binding, nonce, report) = h(<binding, nonce>)
+#endif
+#ifdef OMIT_PEER_POLICY
+macros: checkedPeer(claimed, policyPeer) = policyPeer
+#else
+macros: checkedPeer(claimed, policyPeer) = claimed
+#endif
+
+/* Brokers may trust the same platform key. Policy values are public and
+   chosen at provisioning; each broker's exact-row policy is then immutable.
+   Arbitrary broker/session counts are allowed. Ordered multi-row selection is
+   specified separately in AdmissionPolicy.lean. */
+rule ProvisionPlatform:
+  [ Fr(~root) ]
+  --[ RootKeyCreated(~root) ]->
+  [ !Platform(~root), Out(pk(~root)) ]
+
+rule Provision:
+  [ !Platform(root), Fr(~broker), Fr(~instance),
+    In(<cluster, identity, peer, compose, kms, os, scope>) ]
+  --[ RootTrusted(~broker, root),
+      PolicyPinned(~broker, cluster, identity, peer, compose, kms, os, scope),
+      RuntimeMeasured(~instance, compose, kms, os) ]->
+  [ !Root(~broker, root),
+    !Policy(~broker, cluster, identity, peer, compose, kms, os, scope),
+    !HonestRuntime(root, ~instance, compose, kms, os),
+    Out(<~broker, pk(root), cluster, identity, peer,
+         compose, kms, os, scope, ~instance>) ]
+
+/* A controlled runtime can request arbitrary report_data from its local
+   attestation API. Its real measurements remain fixed by the platform.
+   This grants no ability to forge the platform signature. */
+rule DeployControlledRuntime:
+  [ !Platform(root), In(<compose, kms, os>), Fr(~instance) ]
+  --[ RuntimeMeasured(~instance, compose, kms, os) ]->
+  [ !ControlledRuntime(root, ~instance, compose, kms, os), Out(~instance) ]
+
+rule QuoteControlledRuntime:
+  [ !Platform(root), !ControlledRuntime(root, instance, compose, kms, os),
+    In(<binding, nonce>) ]
+  --[ Quoted(root, instance, compose, kms, os, binding, nonce) ]->
+  [ Out(sign(<'evidence', instance, compose, kms, os,
+               h(<binding, nonce>)>, root)) ]
+
+#ifdef PUBLIC_CHANNEL
+rule HonestStart:
+  [ !Policy(b, cluster, identity, peer, compose, kms, os, scope),
+    !Root(b, root), !HonestRuntime(root, instance, compose, kms, os), Fr(~c) ]
+  -->
+  [ !Channel(~c, b),
+    ClientChallenge(~c, b, cluster, identity, peer, instance, compose),
+    Out(<~c, b>), Out(<'challenge', ~c, b>) ]
+#else
+rule HonestStart:
+  [ !Policy(b, cluster, identity, peer, compose, kms, os, scope),
+    !Root(b, root), !HonestRuntime(root, instance, compose, kms, os), Fr(~c) ]
+  -->
+  [ !Channel(~c, b),
+    ClientChallenge(~c, b, cluster, identity, peer, instance, compose),
+    Out(<~c, b>), !ToBroker(~c, b, <'challenge', ~c, b>) ]
+#endif
+
+/* Anyone may connect on their own channel, without acquiring another
+   client's channel endpoint. Nonces are broker-local, not channel-bound. */
+rule AttackerChannel:
+  [ !Root(b, root), Fr(~c) ]
+  --> [ !Channel(~c, b), !AttackerChannel(~c, b), Out(<~c, b>) ]
+
+#ifdef PUBLIC_CHANNEL
+#else
+rule AttackerSend:
+  [ !AttackerChannel(c, b), In(message) ] --> [ !ToBroker(c, b, message) ]
+rule AttackerReceive:
+  [ !AttackerChannel(c, b), !FromBroker(c, b, message) ] --> [ Out(message) ]
+#endif
+
+/* Typed transport actions feed the same nonce state machine in both modes. */
+#ifdef PUBLIC_CHANNEL
+rule ReceiveChallenge:
+  [ !Channel(c, b), In(<'challenge', c, b>) ] --> [ ChallengeArrived(c, b) ]
+rule SendNonce:
+  [ ChallengeCreated(c, b, nonce) ] --> [ Out(<'nonce', c, b, nonce>) ]
+#else
+rule ReceiveChallenge:
+  [ !Channel(c, b), !ToBroker(c, b, <'challenge', c, b>) ]
+  --> [ ChallengeArrived(c, b) ]
+rule SendNonce:
+  [ ChallengeCreated(c, b, nonce) ]
+  --> [ !FromBroker(c, b, <'nonce', c, b, nonce>) ]
+#endif
+
+#ifdef REPLAY_NONCE
+rule Challenge:
+  [ ChallengeArrived(c, b), Fr(~nonce) ]
+  --[ ChallengeIssued(b, ~nonce) ]->
+  [ !Nonce(b, ~nonce), ChallengeCreated(c, b, ~nonce) ]
+#else
+rule Challenge:
+  [ ChallengeArrived(c, b), Fr(~nonce) ]
+  --[ ChallengeIssued(b, ~nonce) ]->
+  [ Nonce(b, ~nonce), ChallengeCreated(c, b, ~nonce) ]
+
+/* Expiration/restart discards an unconsumed nonce. Already accepted work may
+   finish later, matching consume-before-verification. No timing claim here. */
+rule LoseNonce:
+  [ Nonce(b, nonce) ] --> []
+#endif
+
+#ifdef PUBLIC_CHANNEL
+rule HonestAttest:
+  let binding = <'1', identity, cluster, peer, 'app', instance, compose, 'time'>
+      evidence = sign(<'evidence', instance, compose, kms, os,
+                         h(<binding, nonce>)>, root)
+  in
+  [ ClientChallenge(c, b, cluster, identity, peer, instance, compose),
+    !Root(b, root), !HonestRuntime(root, instance, compose, kms, os),
+    In(<'nonce', c, b, nonce>) ]
+  --[ Quoted(root, instance, compose, kms, os, binding, nonce),
+      HonestRequest(c, b, binding, nonce) ]->
+  [ ClientToken(c, b, binding, nonce),
+    Out(<'attest', c, b, identity, binding, nonce, evidence>) ]
+#else
+rule HonestAttest:
+  let binding = <'1', identity, cluster, peer, 'app', instance, compose, 'time'>
+      evidence = sign(<'evidence', instance, compose, kms, os,
+                         h(<binding, nonce>)>, root)
+  in
+  [ ClientChallenge(c, b, cluster, identity, peer, instance, compose),
+    !Root(b, root), !HonestRuntime(root, instance, compose, kms, os),
+    !FromBroker(c, b, <'nonce', c, b, nonce>) ]
+  --[ Quoted(root, instance, compose, kms, os, binding, nonce),
+      HonestRequest(c, b, binding, nonce) ]->
+  [ ClientToken(c, b, binding, nonce),
+    !ToBroker(c, b, <'attest', c, b, identity, binding, nonce, evidence>) ]
+#endif
+
+/* Linear consumption is independent of the slow verifier and issuer.
+   Malformed/invalid requests may spend a nonce but cannot create a grant. */
+#ifdef PUBLIC_CHANNEL
+rule ReceiveAttest:
+  [ !Channel(c, b), In(<'attest', c, b, identity, binding, nonce, evidence>) ]
+  --> [ AttestArrived(c, b, identity, binding, nonce, evidence) ]
+#else
+rule ReceiveAttest:
+  [ !Channel(c, b),
+    !ToBroker(c, b, <'attest', c, b, identity, binding, nonce, evidence>) ]
+  --> [ AttestArrived(c, b, identity, binding, nonce, evidence) ]
+#endif
+
+#ifdef REPLAY_NONCE
+rule Consume:
+  [ !Nonce(b, nonce), AttestArrived(c, b, identity, binding, nonce, evidence) ]
+  --[ Consumed(b, nonce) ]->
+  [ Pending(c, b, identity, binding, nonce, evidence) ]
+#else
+rule Consume:
+  [ Nonce(b, nonce), AttestArrived(c, b, identity, binding, nonce, evidence) ]
+  --[ Consumed(b, nonce) ]->
+  [ Pending(c, b, identity, binding, nonce, evidence) ]
+#endif
+
+rule VerifyAndIssue:
+  let binding = <version, identity, claimedCluster, claimedPeer, claimedApp,
+                 claimedInstance, claimedCompose, issuedAt>
+      evidence = sign(<'evidence', instance, compose, kms, os,
+                         reportBinding(binding, nonce, report)>, root)
+  in
+  [ !Root(b, root),
+    !Policy(b, cluster, identity, checkedPeer(claimedPeer, policyPeer),
+            compose, kms, os, scope),
+    Pending(c, b, identity, binding, nonce, evidence), Fr(~token) ]
+  --[ Granted(b, nonce, binding, instance, compose, kms, os, scope, ~token) ]->
+  [ Issued(c, b, binding, nonce, ~token) ]
+
+#ifdef PUBLIC_CHANNEL
+rule SendToken:
+  [ Issued(c, b, binding, nonce, token) ]
+  --> [ Out(<'token', c, b, binding, nonce, token>) ]
+#else
+rule SendToken:
+  [ Issued(c, b, binding, nonce, token) ]
+  --> [ !FromBroker(c, b, <'token', c, b, binding, nonce, token>) ]
+#endif
+
+rule RejectOrFail:
+  [ Pending(c, b, identity, binding, nonce, evidence) ] --> []
+
+#ifdef PUBLIC_CHANNEL
+rule HonestFinish:
+  [ ClientToken(c, b, binding, nonce),
+    In(<'token', c, b, binding, nonce, token>) ]
+  --[ Finished(c, b, binding, nonce, token) ]-> []
+#else
+rule HonestFinish:
+  [ ClientToken(c, b, binding, nonce),
+    !FromBroker(c, b, <'token', c, b, binding, nonce, token>) ]
+  --[ Finished(c, b, binding, nonce, token) ]-> []
+#endif
+
+lemma platform_key_secret:
+  "All root #p. RootKeyCreated(root) @ p ==> not (Ex #i. K(root) @ i)"
+
+lemma grant_has_matching_evidence:
+  "All b n binding instance compose kms os scope token #i.
+     Granted(b, n, binding, instance, compose, kms, os, scope, token) @ i
+     ==> (Ex root #t #q. RootTrusted(b, root) @ t
+           & Quoted(root, instance, compose, kms, os, binding, n) @ q & t < i & q < i)"
+
+lemma grant_requires_broker_local_challenge:
+  "All b n binding instance compose kms os scope token #g.
+     Granted(b, n, binding, instance, compose, kms, os, scope, token) @ g
+     ==> (Ex #c. ChallengeIssued(b, n) @ c & c < g)"
+
+lemma shared_platform_root_reachable:
+  exists-trace
+  "Ex b1 b2 root #p #q. RootTrusted(b1, root) @ p
+     & RootTrusted(b2, root) @ q & not (b1 = b2)"
+
+lemma grant_matches_policy:
+  "All b n version identity cluster peer claimedApp claimedInstance claimedCompose issuedAt
+       instance compose kms os scope token #i.
+     Granted(b, n, <version, identity, cluster, peer, claimedApp,
+                    claimedInstance, claimedCompose, issuedAt>,
+             instance, compose, kms, os, scope, token) @ i
+     ==> (Ex policyCluster #p.
+           PolicyPinned(b, policyCluster, identity, peer, compose, kms, os, scope) @ p
+           & p < i)"
+
+lemma nonce_single_grant:
+  "All b n x1 x2 i1 i2 c1 c2 k1 k2 o1 o2 s1 s2 t1 t2 #a #z.
+     Granted(b, n, x1, i1, c1, k1, o1, s1, t1) @ a
+     & Granted(b, n, x2, i2, c2, k2, o2, s2, t2) @ z
+     ==> #a = #z"
+
+lemma honest_token_secret:
+  "All c b binding n token #i.
+     Finished(c, b, binding, n, token) @ i
+     ==> not (Ex #j. K(token) @ j)"
+
+lemma honest_response_authentic:
+  "All c b binding n token #i.
+     Finished(c, b, binding, n, token) @ i
+     ==> (Ex instance compose kms os scope #g.
+           Granted(b, n, binding, instance, compose, kms, os, scope, token) @ g
+           & g < i)"
+
+lemma honest_admission_reachable:
+  exists-trace
+  "Ex c b binding n token #i. Finished(c, b, binding, n, token) @ i"
+
+#ifdef PUBLIC_CHANNEL
+/* Require a real broker-issued token here: learning an attacker-injected
+   dummy response alone is insufficient to witness credential disclosure. */
+lemma issued_token_disclosure_reachable:
+  exists-trace
+  "Ex c b root binding n instance compose kms os scope token #q #r #s #g #k.
+     ChallengeIssued(b, n) @ q
+     & HonestRequest(c, b, binding, n) @ r
+     & Quoted(root, instance, compose, kms, os, binding, n) @ r
+     & Consumed(b, n) @ s
+     & Granted(b, n, binding, instance, compose, kms, os, scope, token) @ g
+     & K(token) @ k & q < r & r < s & s < g & g < k"
+#endif
+
+/* Desired stronger identity property: deliberately false for current policy.
+   Binding caller-supplied instance bytes into report_data does not make those
+   bytes equal to the platform-authenticated instance. */
+lemma claimed_instance_is_attested_instance:
+  "All b n version identity cluster peer claimedApp claimedInstance claimedCompose issuedAt
+       instance compose kms os scope token #i.
+     Granted(b, n, <version, identity, cluster, peer, claimedApp,
+                    claimedInstance, claimedCompose, issuedAt>,
+             instance, compose, kms, os, scope, token) @ i
+     ==> claimedInstance = instance"
+
+end

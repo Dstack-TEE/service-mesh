@@ -58,6 +58,25 @@ CHECKS = [
     ("lifetime", "CandidateLifetime", "EagerExpired", "control", "AttemptWorks"),
     ("lifetime", "CandidateLifetime", "DeferredExpired", "control", "AttemptWorks"),
     ("lifetime", "CandidateLifetime", "Reachable", "witness", "NoConnection"),
+    ("bootstrap", "SlotOwnership", "SlotOwnership", "verified", None),
+    ("bootstrap", "SlotOwnership", "UncheckedCASFailure", "control", "InstanceHasOneSlot"),
+    ("bootstrap", "SlotOwnership", "LiveCleanup", "boundary", "NoLiveAlias"),
+    ("bootstrap", "SlotOwnership", "RetiredCleanup", "boundary", "InstanceHasOneSlot"),
+    ("bootstrap", "SlotOwnership", "DuplicateInstance", "boundary", "NoLiveAlias"),
+    ("bootstrap", "SlotOwnership", "NonAtomic", "control", "NoLiveAlias"),
+    ("bootstrap", "SlotOwnership", "RejoinReachable", "witness", "NoRejoin"),
+    ("bootstrap", "SlotOwnership", "BothClaimedReachable", "witness", "NoBothClaimed"),
+    ("deployment", "ReadRetry", "ReadRetry", "verified", None),
+    ("deployment", "ReadRetry", "ProductionTiming", "verified", None),
+    ("deployment", "ReadRetry", "Exponential", "verified", None),
+    ("deployment", "ReadRetry", "Cancellation", "verified", None),
+    ("deployment", "ReadRetry", "Exhaustion", "verified", None),
+    ("deployment", "ReadRetry", "ShortDeadline", "verified", None),
+    ("deployment", "ReadRetry", "NoRetry", "temporal-control", "Recovery"),
+    ("deployment", "ReadRetry", "RequestDeadline", "temporal-control", "Recovery"),
+    ("deployment", "ReadRetry", "IgnoreRetryAfter", "control", "RespectRetryAfter"),
+    ("deployment", "ReadRetry", "IgnoreCancellation", "control", "NoRequestsAfterCancellation"),
+    ("deployment", "ReadRetry", "Reachable", "witness", "NeverSucceeded"),
 ]
 
 
@@ -126,6 +145,7 @@ def run_check(check, jar, logs, timeout):
         "verified": "VERIFIED MODEL",
         "prefix": "BOUNDED SAFETY PREFIXES (NO LIVENESS CLAIM)",
         "control": "COUNTEREXAMPLE CONTROL",
+        "boundary": "LIFECYCLE/ASSUMPTION COUNTEREXAMPLE",
         "temporal-control": "COUNTEREXAMPLE CONTROL",
         "witness": "REACHABILITY WITNESS",
     }[kind]
@@ -178,6 +198,7 @@ def main():
                 REPO / "components/mesh-conn/signaling.go",
                 REPO / "components/mesh-conn/main.go",
                 REPO / "components/admission-broker/main.go",
+                REPO / "components/bootstrap-secrets/main.go",
             ]
         },
         "checks": results,

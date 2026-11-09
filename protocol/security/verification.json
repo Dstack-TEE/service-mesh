@@ -1,0 +1,232 @@
+{
+  "checked_at_utc": "2026-10-25T16:47:00.890018+00:00",
+  "scope": "Unbounded symbolic safety under documented primitive, policy and channel assumptions",
+  "passed": true,
+  "inputs_unchanged": true,
+  "tools": {
+    "tamarin": {
+      "version": "1.12.0",
+      "url": "https://github.com/tamarin-prover/tamarin-prover/releases/download/1.12.0/tamarin-prover-1.12.0-linux64-ubuntu.tar.gz",
+      "sha256": "201be06f469e47cff554df6ca93db8366fc2c69d70c61fcbd1370a1074b469c6",
+      "binary": "tamarin-prover"
+    },
+    "maude": {
+      "version": "3.5.1",
+      "url": "https://github.com/maude-lang/Maude/releases/download/Maude3.5.1/Maude-3.5.1-linux-x86_64.zip",
+      "sha256": "72ed1ca87e3b3d0dfc6ee1436baf154bf04c45ff97d521bec040c5e8dfc8f92c",
+      "binary": "maude"
+    }
+  },
+  "checker_sha256": "8e66965d46f61feb3ba5e155413c8a051e60527e1d9079ff37f00c5724634f23",
+  "checks": [
+    {
+      "check": "signaling-auth",
+      "source": "protocol/snapshots/SignalingAuth.spthy",
+      "source_sha256": "22b9e758afd538296c9f555507a4fa7aa3768d642ec972b31bb8e655de5f9636",
+      "define": null,
+      "expectation_met": true,
+      "exit_code": 0,
+      "expected_results": {
+        "record_authentic_unless_root_exposed": "verified",
+        "access_token_does_not_reveal_record_key": "verified",
+        "publication_reachable": "verified",
+        "individual_authentication_despite_other_member_compromise": "falsified"
+      },
+      "results": {
+        "record_authentic_unless_root_exposed": {
+          "quantifier": "all-traces",
+          "result": "verified"
+        },
+        "access_token_does_not_reveal_record_key": {
+          "quantifier": "all-traces",
+          "result": "verified"
+        },
+        "publication_reachable": {
+          "quantifier": "exists-trace",
+          "result": "verified"
+        },
+        "individual_authentication_despite_other_member_compromise": {
+          "quantifier": "all-traces",
+          "result": "falsified"
+        }
+      },
+      "log": "signaling-auth.log",
+      "proof": "signaling-auth.spthy",
+      "traces": "signaling-auth-traces.json",
+      "artifact_sha256": {
+        "signaling-auth.spthy": "ff9a020b43eb3f53d2f9fd9e3c933c7ea9ecff3c32a0196eb2c101ca9437bb5e",
+        "signaling-auth-traces.json": "749cea70f0c3550f8165e7143fbee9257be0657eb09c8a43ac289a52ba07245b"
+      }
+    },
+    {
+      "check": "admission",
+      "source": "protocol/admission/AdmissionSecurity.spthy",
+      "source_sha256": "b8753047a3a3f3372609046d15094461c66809ba13eac2fd38abf1ba061c574a",
+      "define": null,
+      "expectation_met": true,
+      "exit_code": 0,
+      "expected_results": {
+        "platform_key_secret": "verified",
+        "grant_has_matching_evidence": "verified",
+        "grant_requires_broker_local_challenge": "verified",
+        "shared_platform_root_reachable": "verified",
+        "grant_matches_policy": "verified",
+        "nonce_single_grant": "verified",
+        "honest_token_secret": "verified",
+        "honest_response_authentic": "verified",
+        "honest_admission_reachable": "verified",
+        "claimed_instance_is_attested_instance": "falsified"
+      },
+      "results": {
+        "platform_key_secret": {
+          "quantifier": "all-traces",
+          "result": "verified"
+        },
+        "grant_has_matching_evidence": {
+          "quantifier": "all-traces",
+          "result": "verified"
+        },
+        "grant_requires_broker_local_challenge": {
+          "quantifier": "all-traces",
+          "result": "verified"
+        },
+        "shared_platform_root_reachable": {
+          "quantifier": "exists-trace",
+          "result": "verified"
+        },
+        "grant_matches_policy": {
+          "quantifier": "all-traces",
+          "result": "verified"
+        },
+        "nonce_single_grant": {
+          "quantifier": "all-traces",
+          "result": "verified"
+        },
+        "honest_token_secret": {
+          "quantifier": "all-traces",
+          "result": "verified"
+        },
+        "honest_response_authentic": {
+          "quantifier": "all-traces",
+          "result": "verified"
+        },
+        "honest_admission_reachable": {
+          "quantifier": "exists-trace",
+          "result": "verified"
+        },
+        "claimed_instance_is_attested_instance": {
+          "quantifier": "all-traces",
+          "result": "falsified"
+        }
+      },
+      "log": "admission.log",
+      "proof": "admission.spthy",
+      "traces": "admission-traces.json",
+      "artifact_sha256": {
+        "admission.spthy": "c8d63faea580cf5a632cb45e22a2a70122716dd0088fa559a2c493fb7274af7c",
+        "admission-traces.json": "bfdff5f6047a30c8b1be4824c653f4f297d5df423d6e7d805f6e6a47aafd4493"
+      }
+    },
+    {
+      "check": "replayed-nonce",
+      "source": "protocol/admission/AdmissionSecurity.spthy",
+      "source_sha256": "b8753047a3a3f3372609046d15094461c66809ba13eac2fd38abf1ba061c574a",
+      "define": "REPLAY_NONCE",
+      "expectation_met": true,
+      "exit_code": 0,
+      "expected_results": {
+        "nonce_single_grant": "falsified"
+      },
+      "results": {
+        "nonce_single_grant": {
+          "quantifier": "all-traces",
+          "result": "falsified"
+        }
+      },
+      "log": "replayed-nonce.log",
+      "proof": "replayed-nonce.spthy",
+      "traces": "replayed-nonce-traces.json",
+      "artifact_sha256": {
+        "replayed-nonce.spthy": "02a7982cd0dba0f28aab5a9d997771c207c80b0c378a1592d3789ba589e7793a",
+        "replayed-nonce-traces.json": "083db2d85ecd560b48a235462e4bbd29f62f1012c49dc589cc16e7527d34755e"
+      }
+    },
+    {
+      "check": "unbound-evidence",
+      "source": "protocol/admission/AdmissionSecurity.spthy",
+      "source_sha256": "b8753047a3a3f3372609046d15094461c66809ba13eac2fd38abf1ba061c574a",
+      "define": "OMIT_REPORT_BINDING",
+      "expectation_met": true,
+      "exit_code": 0,
+      "expected_results": {
+        "grant_has_matching_evidence": "falsified"
+      },
+      "results": {
+        "grant_has_matching_evidence": {
+          "quantifier": "all-traces",
+          "result": "falsified"
+        }
+      },
+      "log": "unbound-evidence.log",
+      "proof": "unbound-evidence.spthy",
+      "traces": "unbound-evidence-traces.json",
+      "artifact_sha256": {
+        "unbound-evidence.spthy": "203dbdeaa6a0aa943d437078b25e002f5575215c2c201bd38b1ccad0a1bedf0b",
+        "unbound-evidence-traces.json": "621ea63fc26ee45cac723ade3a109b268d7d032a9914f13d60184a0db91297b5"
+      }
+    },
+    {
+      "check": "unmatched-peer",
+      "source": "protocol/admission/AdmissionSecurity.spthy",
+      "source_sha256": "b8753047a3a3f3372609046d15094461c66809ba13eac2fd38abf1ba061c574a",
+      "define": "OMIT_PEER_POLICY",
+      "expectation_met": true,
+      "exit_code": 0,
+      "expected_results": {
+        "grant_matches_policy": "falsified"
+      },
+      "results": {
+        "grant_matches_policy": {
+          "quantifier": "all-traces",
+          "result": "falsified"
+        }
+      },
+      "log": "unmatched-peer.log",
+      "proof": "unmatched-peer.spthy",
+      "traces": "unmatched-peer-traces.json",
+      "artifact_sha256": {
+        "unmatched-peer.spthy": "667a16e0fb523be681668e76e94b0398348f0a38eccecee01be52b65d611d10b",
+        "unmatched-peer-traces.json": "1c27f18f7f4ddd918011d1db10b5a586ef2b7c8a25cafd790389f85122a572ec"
+      }
+    },
+    {
+      "check": "public-admission-channel",
+      "source": "protocol/admission/AdmissionSecurity.spthy",
+      "source_sha256": "b8753047a3a3f3372609046d15094461c66809ba13eac2fd38abf1ba061c574a",
+      "define": "PUBLIC_CHANNEL",
+      "expectation_met": true,
+      "exit_code": 0,
+      "expected_results": {
+        "honest_token_secret": "falsified",
+        "issued_token_disclosure_reachable": "verified"
+      },
+      "results": {
+        "honest_token_secret": {
+          "quantifier": "all-traces",
+          "result": "falsified"
+        },
+        "issued_token_disclosure_reachable": {
+          "quantifier": "exists-trace",
+          "result": "verified"
+        }
+      },
+      "log": "public-admission-channel.log",
+      "proof": "public-admission-channel.spthy",
+      "traces": "public-admission-channel-traces.json",
+      "artifact_sha256": {
+        "public-admission-channel.spthy": "7a8e5d9de096142583fd1358a2c1c967ee164e60f32b947a4194bc0ce88767bf",
+        "public-admission-channel-traces.json": "32e401872850fa6afc4fd4699cda77fe03ef016924e150cb184ad7216c1ee36e"
+      }
+    }
+  ]
+}

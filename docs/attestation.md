@@ -195,8 +195,10 @@ commands.
 
 ## Current Limits
 
-- The low-level mesh rendezvous path still uses TURN HMAC admission.
-  Attestation admission gates Consul/Connect identity, not rendezvous.
+- The low-level mesh rendezvous path uses shared-bootstrap-key signaling.
+  Attestation admission gates Consul/Connect identity, not rendezvous. The
+  [symbolic security models](../protocol/security/README.md) record the checked
+  admission properties, channel assumptions, and instance-binding limits.
 - Broker-issued Consul tokens do not expire by default. Setting
   `ADMISSION_TOKEN_TTL` requires a renewal path for the Consul agent,
   Patroni DCS token, and Envoy xDS token.
